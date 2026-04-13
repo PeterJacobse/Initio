@@ -39,7 +39,7 @@ class Initio:
             structure = Structure.from_file(path)
             return structure
         except Exception as e:
-            print("Error loading the wavecar")
+            print("Error loading the structure")
             return False
 
     def DOS_from_energies(self, eigenenergies: list | np.ndarray = [], gamma = None, sigma = None, energy_range = None, points = None, dE: float = 0.1, weights: list | np.ndarray = []) -> np.ndarray:
@@ -109,9 +109,7 @@ class Initio:
         return {"HOMO_up_index": HOMO_up_index, "HOMO_down_index": HOMO_down_index, "LUMO_up_index": LUMO_up_index, "LUMO_down_index": LUMO_down_index,
                 "HOMO_up_energy": HOMO_up_energy, "HOMO_down_energy": HOMO_down_energy, "LUMO_up_energy": LUMO_up_energy, "LUMO_down_energy": LUMO_down_energy}
 
-    def spin_and_occupation_resolved_DOS(self, wavecar_object: vaspwfc, *args, **kwargs) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        weights = kwargs.pop("weights", None)
-       
+    def get_eigenenergies_from_wavecar(self, wavecar_object: vaspwfc) -> dict:
         all_bands = wavecar_object._bands
         all_band_occs = wavecar_object._occs
         
@@ -120,6 +118,15 @@ class Initio:
         
         [bands_up_gamma, bands_down_gamma] = [bands_up[0], bands_down[0]] # Assuming k-point 0 is the Gamma point
         [occs_up_gamma, occs_down_gamma] = [occs_up[0], occs_down[0]]
+        
+        return {"energies": {"spin up": bands_up_gamma, "spin down": bands_down_gamma}, "occupations": {"spin up": occs_up_gamma, "spin down": occs_down_gamma}}
+
+    def spin_and_occupation_resolved_DOS(self, wavecar_object: vaspwfc, *args, **kwargs) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        weights = kwargs.pop("weights", None)
+        
+        energy_dict = self.get_eigenenergies_from_wavecar(wavecar_object)
+        [bands_up_gamma, bands_down_gamma] = [energy_dict["energies"][spin] for spin in ["spin up", "spin down"]]
+        [occs_up_gamma, occs_down_gamma] = [energy_dict["occupations"][spin] for spin in ["spin up", "spin down"]]
 
         LDOS_up_occ = self.DOS_from_energies(bands_up_gamma, weights = occs_up_gamma, *args, **kwargs)
         LDOS_up_unocc = self.DOS_from_energies(bands_up_gamma, weights = 1 - occs_up_gamma, *args, **kwargs)
@@ -127,7 +134,7 @@ class Initio:
         LDOS_down_unocc = self.DOS_from_energies(bands_down_gamma, weights = 1 - occs_down_gamma, *args, **kwargs)
         
         return (LDOS_up_occ, LDOS_up_unocc, LDOS_down_occ, LDOS_down_unocc)
-    
+
     def DOS_plot(self, wavecar_object: vaspwfc, *args, **kwargs) -> plt.Figure:
         colors = kwargs.pop("colors", None)
         
