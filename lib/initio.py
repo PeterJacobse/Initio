@@ -4,7 +4,6 @@ from matplotlib import colors as cols
 import numpy as np
 from . import vaspwfc
 from pymatgen.core import Lattice, Structure, Molecule
-import nglview as nv
 
 
 
@@ -17,7 +16,7 @@ class Initio:
         
         match base_name:
             case "WAVECAR":
-                wfc = self.get_wavecar(path)
+                wfc = self.get_wavecar(path, lgamma = False)
                 return wfc
             case "POSCAR" | "CONTCAR":
                 struc = self.get_structure(path)
@@ -69,7 +68,7 @@ class Initio:
         
 
 
-        # Use Lorentzian broadening                
+        # Use Lorentzian broadening
         if isinstance(gamma, float) and gamma > 0:
             gamma2 = gamma ** 2
             
@@ -150,11 +149,19 @@ class Initio:
         
         (LDOS_up_occ, LDOS_up_unocc, LDOS_down_occ, LDOS_down_unocc) = self.spin_and_occupation_resolved_DOS(wavecar_object, *args, **kwargs)
         
-        fig, ax = plt.subplots()        
+        fig, ax = plt.subplots()
         ax.fill_betweenx(LDOS_up_occ[0], LDOS_up_occ[1], color = col_up_occ)
         ax.fill_betweenx(LDOS_up_unocc[0], LDOS_up_unocc[1], color = col_up_unocc)
         ax.fill_betweenx(LDOS_down_occ[0], -LDOS_down_occ[1], color = col_down_occ)
         ax.fill_betweenx(LDOS_down_unocc[0], -LDOS_down_unocc[1], color = col_down_unocc)
         
+        ax.set_xlabel("total DOS up    total DOS down")
+        ax.set_ylabel("energy (eV)")
+        
+        en_range = kwargs.get("energy_range")
+        ax.set_ylim(en_range[0], en_range[1])
+        ax.yaxis.set_minor_locator(ticker.MultipleLocator(.1))
+        
+        ax.grid(True, which = "both", axis = "y", color = "gray", linewidth = 0.5, alpha = 0.5)
         return fig
 
