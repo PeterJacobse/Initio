@@ -12,5 +12,6 @@ dependencies = [
     "nglview>=4.0.1",
     "numpy>=2.4.4",
     "pymatgen>=2026.3.23",
+    "scikit-image>=0.26.0",
     "scipy>=1.17.1",
 ]
