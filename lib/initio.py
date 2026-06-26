@@ -49,7 +49,7 @@ class Initio:
             structure = Structure.from_file(path)
             return structure
         except Exception as e:
-            print("Error loading the structure")
+            print(f"Error loading the structure: {e}")
             return False
 
     def DOS_from_energies(self, eigenenergies: list | np.ndarray = [], gamma = None, sigma = None, energy_range = None, points = None, dE: float = 0.1, weights: list | np.ndarray = []) -> np.ndarray:
@@ -236,8 +236,8 @@ class Initio:
         view.layout.width = f"{width}px"
         return view
 
-    def orbital_plot(self, wavecar_object: vaspwfc, ispin: int = 1, ikpt: int = 1, iband: int = 1, isolevel: float = .1, opacity: float = 1.,
-                     struc: Structure = None, max_bond_length: float = 2.6, atom_size: float = .3, bond_size: float = .22, struc_opacity: float = 1.,
+    def orbital_plot(self, wavecar_object: vaspwfc, ispin: int = 1, ikpt: int = 1, iband: int = 1, isolevel: float = .1, opacity: float = 1., flip_x: bool = False, flip_y: bool = False, flip_z: bool = False,
+                     struc: Structure = None, max_bond_length: float = 2.6, atom_size: float = .3, bond_size: float = .22, struc_opacity: float = 1., translate: list = [0, 0, 0],
                      width: int = 800, height: int = 600, camera_type: str = "orthographic") -> nv.NGLWidget:
         if not isinstance(wavecar_object, vaspwfc):
             print(f"Invalid wave function")
@@ -246,7 +246,10 @@ class Initio:
         if not isinstance(struc_opacity, float | int) or struc_opacity < 0 or struc_opacity > 1: struc_opacity = 1.
         
         try:
-            psi = wavecar_object.wfc_r(ispin = ispin, ikpt = ikpt, iband = iband)
+            psi: np.ndarray = wavecar_object.wfc_r(ispin = ispin, ikpt = ikpt, iband = iband)
+            if flip_x: psi = np.flip(psi, axis = 0)
+            if flip_y: psi = np.flip(psi, axis = 1)
+            if flip_z: psi = np.flip(psi, axis = 2)
             orb_plus = np.abs(np.clip(psi, a_min = 0, a_max = np.inf)) ** 2
             orb_minus = np.abs(np.clip(psi, a_min = -np.inf, a_max = 0) ** 2)
         
@@ -268,7 +271,7 @@ class Initio:
         try:
             for orb, color in zip([orb_plus, orb_minus], [[.8, .4, 0], [0, .2, .9]]):
                 (verts, faces, normals, values) = measure.marching_cubes(orb, level = isolevel * np.max(orb_plus))
-                verts_Ang = verts * voxel_size
+                verts_Ang = verts * voxel_size + translate
                 
                 v0 = verts_Ang[faces[:, 0]]
                 v1 = verts_Ang[faces[:, 1]]
@@ -360,6 +363,7 @@ class Initio:
                     weights /= np.sum(weights)
 
                     image = np.average(densities, axis = 0, weights = weights)
-                    plt.imsave(f"./{output_folder}/LDOS_w{int(round(width_pm))}pm@{int(round(target_energy_meV))}meV_{int(z_slice_height_pm)}pm.png", image, cmap = "gray")                    
+                    plt.imsave(f"./{output_folder}/LDOS_w{int(round(width_pm))}pm_h{int(z_slice_height_pm)}pm@{int(round(target_energy_meV))}meV.png", image, cmap = "gray")                    
         return
+
 
