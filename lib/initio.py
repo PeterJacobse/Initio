@@ -4,30 +4,39 @@ import matplotlib.ticker as ticker
 from matplotlib import colors as cols
 import numpy as np
 from . import vaspwfc
-from pymatgen.core import Lattice, Structure, Molecule
+import pymatgen.core.structure as pmg_struct
+from pymatgen.core import periodic_table
 from pymatgen.io import vasp, ase
 import nglview as nv
 from skimage import measure
-from ase.neighborlist import natural_cutoffs, NeighborList
+from ase.neighborlist import NeighborList
+from ase.data.colors import jmol_colors
 from scipy.ndimage import gaussian_filter, zoom, sobel
 
 
 
 class Initio:
     def __init__(self):
-        pass
+        cm = nv.color.ColormakerRegistry
+        cm.add_scheme_func('custom_carbon', '''
+            this.atomColor = function (atom) {
+                if (atom.element == "C") {
+                    return 0x333333; // Hex code format for JavaScript
+                } else {
+                    return 0xcccccc; // Default color for other atoms
+                }
+            }
+        ''')
 
-    def read_vasp_file(self, path: str) -> vaspwfc | Structure | bool:
+
+
+    def read_vasp_file(self, path: str) -> vaspwfc | Initio.Structure | bool:
         base_name = os.path.basename(path)
         
         match base_name:
-            case "WAVECAR":
-                wfc = self.get_wavecar(path)
-                
-                return wfc
-            case "POSCAR" | "CONTCAR":
-                struc = self.get_structure(path)
-                return struc
+            case "WAVECAR": return self.get_wavecar(path)
+            case "POSCAR" | "CONTCAR": return self.get_structure(path)
+            case "PROCAR": return self.get_procar(path)
             case _:
                 print(f"Could not determine file type of provided file {path}")
                 return False
@@ -44,13 +53,19 @@ class Initio:
             print("Error loading the wavecar")
             return False
 
-    def get_structure(self, path: str) -> Structure:
+    def get_structure(self, path: str) -> Initio.Structure:
         try:
-            structure = Structure.from_file(path)
+            structure = self.Structure.from_file(path)
             return structure
         except Exception as e:
             print(f"Error loading the structure: {e}")
             return False
+
+    def get_procar(self, path: str) -> vasp.Procar:
+        procar = None
+        try: procar = vasp.outputs.Procar(path)
+        except Exception as e: print(f"Could not open PROCAR file: {e}")
+        return procar
 
     def DOS_from_energies(self, eigenenergies: list | np.ndarray = [], gamma = None, sigma = None, energy_range = None, points = None, dE: float = 0.1, weights: list | np.ndarray = []) -> np.ndarray:
         use_weights = False
@@ -198,12 +213,13 @@ class Initio:
         ax.grid(True, which = "both", axis = "y", color = "gray", linewidth = 0.5, alpha = 0.5)
         return fig
 
-    def structure_plot(self, structure: Structure, max_bond_length: float = None, width: int = 800, height: int = 600, atom_size: float = .3, bond_size: float = .22, camera_type: str = "orthographic") -> nv.NGLWidget:
+    def structure_plot(self, structure: Initio.Structure, max_bond_length: float = None, width: int = 800, height: int = 600, atom_size: float = .3, bond_size: float = .22,
+                       camera_type: str = "orthographic", flip_over: bool = False, background_color: str = "#000000") -> nv.NGLWidget:
         atoms = ase.AseAtomsAdaptor.get_atoms(structure)
         Z = list(structure.atomic_numbers)
         R = structure.cart_coords
-        Zcolors = [.5 * rgb if atomic_number > 0 else (0, 0, 0) for atomic_number, rgb in enumerate(jmol_colors)]
-        Zcolors[6] = "#404040"
+        Zcolors = np.array([.5 * rgb if atomic_number > 0 else (0, 0, 0) for atomic_number, rgb in enumerate(jmol_colors)])
+        Zcolors[6] = [.1, .1, .1]
         
         if not max_bond_length:
             if 74 in Z: max_bond_length = 2.6 # Shortcut for working with TMDs
@@ -212,9 +228,64 @@ class Initio:
         cutoffs = [max_bond_length / 2.0] * len(atoms)
         nl = NeighborList(cutoffs, skin = 0.0, bothways = True, self_interaction = False)
         nl.update(atoms)
-
+        
         view = nv.show_ase(atoms)
-        view.stage.set_parameters(depth_of_field = 0, fog_near = 100, fog_far = 100, camera_type = camera_type)
+        view.stage.set_parameters(depth_of_field = 0, fog_near = 100, fog_far = 100, camera_type = camera_type, background_color = background_color)
+        view._execute_js_code("""
+            var stage = this.stage;
+
+            // 1. Turn off nglview's built-in mouseover tooltip text engine
+            stage.setParameters({ tooltip: false });
+
+            // 2. Create or grab our isolated HTML tooltip element
+            var customTooltip = document.getElementById("custom-ngl-tooltip");
+            if (!customTooltip) {
+                customTooltip = document.createElement("div");
+                customTooltip.id = "custom-ngl-tooltip";
+                customTooltip.style.position = "fixed";  // Fixed positioning prevents scroll/canvas coordinate offset errors
+                customTooltip.style.zIndex = "10005";
+                customTooltip.style.background = "rgba(0, 0, 0, 0.85)";
+                customTooltip.style.color = "white";
+                customTooltip.style.padding = "4px 8px";
+                customTooltip.style.borderRadius = "4px";
+                customTooltip.style.fontFamily = "monospace";
+                customTooltip.style.fontSize = "12px";
+                customTooltip.style.pointerEvents = "none";
+                customTooltip.style.display = "none";
+                document.body.appendChild(customTooltip);
+            }
+
+            // 3. Track actual mouse screen coordinates on the container
+            var mouseX = 0;
+            var mouseY = 0;
+            stage.viewer.container.addEventListener('mousemove', function(e) {
+                mouseX = e.clientX;
+                mouseY = e.clientY;
+                
+                // If tooltip is visible, update its position dynamically with the mouse movement
+                if (customTooltip.style.display === "block") {
+                    customTooltip.style.left = (mouseX + 15) + "px";
+                    customTooltip.style.top = (mouseY + 15) + "px";
+                }
+            });
+
+            // 4. Update the content when an atom is hovered
+            stage.signals.hovered.add(function(pickingProxy) {
+                if (pickingProxy && pickingProxy.atom) {
+                    var atom = pickingProxy.atom;
+                    
+                    // Build the clean string showing name and index
+                    customTooltip.innerText = atom.qualifiedName() + " (Index: " + atom.index + ")";
+                    
+                    // Position near the recorded mouse coordinates and display
+                    customTooltip.style.left = (mouseX + 15) + "px";
+                    customTooltip.style.top = (mouseY + 15) + "px";
+                    customTooltip.style.display = "block";
+                } else {
+                    customTooltip.style.display = "none";
+                }
+            });
+        """)
         
         bonds = []
         for atom_index in range(len(atoms)):
@@ -235,19 +306,22 @@ class Initio:
         
         view.clear_representations()
         view.component_0.add_spacefill(radiusType = "vdw", radiusScale = atom_size)
-        view.component_0.add_spacefill(selection = "_C", radiusType = "vdw", radiusScale = atom_size, colorValue = Zcolors[6])
-        view.component_0.add_spacefill(selection = "_N", radiusType = "vdw", radiusScale = atom_size + .1, colorValue = Zcolors[8]) # Emphasize nitrogen
+        view.component_0.add_spacefill(selection = "_C", radiusType = "vdw", radiusScale = atom_size, color = "custom_carbon")
+        view.component_0.add_spacefill(selection = "_N", radiusType = "vdw", radiusScale = atom_size + .1, colorValue = 2 * Zcolors[8]) # Emphasize nitrogen
         view.control.center(np.mean(structure.cart_coords, axis = 0))
+        if flip_over: view.control.spin([1, 0, 0], np.deg2rad(180))
+        view.center()
 
         view.height = f"{height}px"
         view.width = f"{width}px"
         view.layout.height = f"{height}px"
         view.layout.width = f"{width}px"
+        view.layout.background = background_color
         return view
 
     def orbital_plot(self, wavecar_object: vaspwfc, ispin: int = 1, ikpt: int = 1, iband: int = 1, isolevel: float = .1, opacity: float = 1., flip_x: bool = False, flip_y: bool = False, flip_z: bool = False, upsampling: int = 1,
                      structure: Structure = None, max_bond_length: float = 2.6, atom_size: float = .3, bond_size: float = .22, struc_opacity: float = 1.,
-                     width: int = 800, height: int = 600, camera_type: str = "orthographic") -> nv.NGLWidget:
+                     width: int = 800, height: int = 600, camera_type: str = "orthographic", flip_over: bool = False, background_color: str = "#000000") -> nv.NGLWidget:
         if not isinstance(wavecar_object, vaspwfc):
             print(f"Invalid wave function")
             return
@@ -270,8 +344,8 @@ class Initio:
             print(f"{e}")
             return
         
-        if isinstance(structure, Structure):
-            view = self.structure_plot(structure, max_bond_length, width, height, atom_size, bond_size, camera_type)
+        if isinstance(structure, Initio.Structure):
+            view = self.structure_plot(structure, max_bond_length, width, height, atom_size, bond_size, camera_type, background_color = background_color)
             view.update_representation(component = len(view._ngl_component_names) - 2, repr_index = 0, opacity = struc_opacity, transparent = True, depthWrite = False)
             view.update_representation(component = len(view._ngl_component_names) - 1, repr_index = 0, opacity = struc_opacity, transparent = True, depthWrite = False)
         else:
@@ -296,95 +370,19 @@ class Initio:
                 
                 view.shape.add_mesh(flat_positions, flat_colors, None, flat_normals, "Isosurface")
                 view.update_representation(component = len(view._ngl_component_names) - 1, repr_index = 0, side = "front", opacity = opacity, transparent = True, flatShading = False, depthWrite = True, opaqueBack = True)
+        
+            if flip_over: view.control.spin([1, 0, 0], np.deg2rad(180))
+            view.center()
+            view.layout.background = background_color
         except:
             print("Problem creating the mesh")
 
         return view
 
-    # Legacy function superseded by the LDOSGenerator
-    def LDOS_maps(self, wavecar_object: vaspwfc, structure: Structure, energy_values_meV: list | np.ndarray = [], z_values_pm: list | np.ndarray | float | int = 0.,
-                width_values_pm: list | np.ndarray | float | int = 0., gamma_meV: float = 50, n_gammas: int = 5, output_folder: str = "LDOS_maps"):
-        # Initialize important parameters
-        gamma_eV = gamma_meV / 1000
-        gamma2 = gamma_eV ** 2
-        voxels = wavecar_object._ngrid * 2
-        voxel_size_Ang = np.diag(wavecar_object._Acell) / voxels
-        px_per_pm = 1 / (100 * np.mean(voxel_size_Ang))
-        atom_z_values_nm = structure.cart_coords[:, 2] * .1
-        z_surface_nm = np.mean(np.partition(atom_z_values_nm, -12)[-12:-10])
-        z_nm_per_vox = voxel_size_Ang[2] / 10
-        n_spins = int(wavecar_object._nspin)
-        n_kpts = int(wavecar_object._nkpts)
-        
-        # Get the band energies and take a selection ranging from n_gammas times the Lorentzian width below the minimum energy value to n_gammas times above the maximum energy value
-        energy_dict = self.get_eigenenergies_from_wavecar(wavecar_object)
-        spin_up_energies = energy_dict["energies"]["spin up"]
-        spin_down_energies = energy_dict["energies"]["spin down"]
-        k_resolved_spin_up_energies = spin_up_energies.reshape(n_kpts, -1)
-        k_resolved_spin_down_energies = spin_down_energies.reshape(n_kpts, -1)        
-        
-        min_up_index = min([int(np.where(k_resolved_spin_up_energies[kpt] > .001 * np.min(energy_values_meV) - n_gammas * (gamma_meV / 1000))[0][0]) for kpt in range(len(k_resolved_spin_up_energies))])
-        min_down_index = min([int(np.where(k_resolved_spin_down_energies[kpt] > .001 * np.min(energy_values_meV) - n_gammas * (gamma_meV / 1000))[0][0]) for kpt in range(len(k_resolved_spin_down_energies))])
-        min_orbital_index = min((min_up_index, min_down_index))
-        max_up_index = max([int(np.where(k_resolved_spin_up_energies[kpt] < .001 * np.max(energy_values_meV) + n_gammas * (gamma_meV / 1000))[0][-1]) for kpt in range(len(k_resolved_spin_up_energies))])
-        max_down_index = max([int(np.where(k_resolved_spin_down_energies[kpt] < .001 * np.max(energy_values_meV) + n_gammas * (gamma_meV / 1000))[0][-1]) for kpt in range(len(k_resolved_spin_down_energies))])
-        max_orbital_index = max((max_up_index, max_down_index))
-        orbital_indices = np.arange(min_orbital_index, max_orbital_index + 1, 1, dtype = np.int32)
-
-        selected_spin_up_energies = np.concatenate([k_resolved_spin_up_energies[kpt][orbital_indices] for kpt in range(n_kpts)])
-        selected_spin_down_energies = np.concatenate([k_resolved_spin_down_energies[kpt][orbital_indices] for kpt in range(n_kpts)])
-        energies = np.concatenate((selected_spin_up_energies, selected_spin_down_energies))
-        
-        # Extract a subset of the wavefunctions from the wavecar file and store it in wfns
-        wfns = np.zeros((n_spins, n_kpts, len(orbital_indices), voxels[0], voxels[1], voxels[2]), dtype = np.complex64)
-        for spin_index in range(n_spins):
-            for k_index in range(n_kpts):
-                for index, orb_index in enumerate(orbital_indices):
-                    wfns[spin_index, k_index, index] = wavecar_object.wfc_r(spin_index + 1, k_index + 1, orb_index + 1)
-        
-        # Create the output directory and clean the tip height and width
-        os.makedirs(os.path.join(os.curdir, output_folder), exist_ok = True)
-        if isinstance(z_values_pm, int | float): z_values_pm = [z_values_pm]
-        if not isinstance(z_values_pm, list | np.ndarray): print("Invalid height value(s)")
-        if isinstance(width_values_pm, int | float): width_values_pm = [width_values_pm]
-        if not isinstance(width_values_pm, list | np.ndarray): print("Invalid width value(s)")
-        if isinstance(energy_values_meV, int | float): energy_values_meV = [energy_values_meV]
-        if not isinstance(energy_values_meV, list | np.ndarray): print("Invalid energy value(s)")
-        if not isinstance(energy_values_meV, list | np.ndarray) or not isinstance(width_values_pm, list | np.ndarray) or not isinstance(z_values_pm, list | np.ndarray): return
-
-        # Loop over heights
-        for z_slice_height_pm in z_values_pm:
-            # Slice out the 2D wavefunction from the 3D wavefunction at the requested height
-            z_target = z_surface_nm + z_slice_height_pm / 1000
-            z_slice_index = int(z_target / z_nm_per_vox)
-            wfns2D = wfns[:, :, :, :, :, z_slice_index]            
-            spin_k_collapsed_wfns2D = wfns2D.reshape(-1, voxels[0], voxels[1]) # Flatten out the k and spin
-            
-            for width_pm in width_values_pm:
-                # Broaden the wavefunction according to their overlap with the Gaussian tip wavefunction
-                width_px = width_pm * px_per_pm
-                broadened_wfns2D = [gaussian_filter(image, width_px, mode = "wrap") for image in spin_k_collapsed_wfns2D]
-                densities = np.asarray(np.abs(np.array(broadened_wfns2D)) ** 2, dtype = np.float32)
-
-                for target_energy_meV in energy_values_meV:
-                    en_differences = np.array(energies, dtype = np.float32) - (.001 * target_energy_meV)
-                    
-                    weights = gamma_eV / (gamma2 + en_differences ** 2)
-                    weights /= np.sum(weights)
-
-                    image = np.average(densities, axis = 0, weights = weights)
-                    plt.imsave(f"./{output_folder}/LDOS_w{int(round(width_pm))}pm_h{int(z_slice_height_pm)}pm@{int(round(target_energy_meV))}meV.png", image, cmap = "gray")                    
-        return
-
-    def LDOSGenerator(self, wavecar_object: vaspwfc, structure: Structure, energy_range_eV: list | np.ndarray = [], gamma_meV: float = 50, n_gammas: int = 5,
-                      tip_width_pm: float = 0., tip_p_fraction: float = 0., tip_height_pm: float = 200.):
-        return self.LDG(self, wavecar_object = wavecar_object, structure = structure, energy_range_eV = energy_range_eV, gamma_meV = gamma_meV, n_gammas = n_gammas,
-                        tip_width_pm = tip_width_pm, tip_p_fraction = tip_p_fraction, tip_height_pm = tip_height_pm)
-
-    class LDG:
-        def __init__(self, initio_instance: Initio, wavecar_object: vaspwfc, structure: Structure, energy_range_eV: list | np.ndarray = [], gamma_meV: float = 50, n_gammas: int = 5,
+    class LDOSGenerator:
+        def __init__(self, wavecar_object: vaspwfc, structure: Initio.Structure, energy_range_eV: list | np.ndarray = [], gamma_meV: float = 50, n_gammas: int = 5,
                      tip_width_pm: float = 0., tip_p_fraction: float = 0., tip_height_pm = 200.):
-            self.initio_instance = initio_instance
+            initio_instance = Initio()
             self.wfc = wavecar_object
             self.struc = structure
             self.set_tip_shape(tip_width_pm, tip_p_fraction)
@@ -407,7 +405,7 @@ class Initio:
 
 
             # Get the band energies and take a selection ranging from n_gammas times the Lorentzian width below the minimum energy value to n_gammas times above the maximum energy value
-            energy_dict = self.initio_instance.get_eigenenergies_from_wavecar(wavecar_object)
+            energy_dict = initio_instance.get_eigenenergies_from_wavecar(wavecar_object)
             spin_up_energies = energy_dict["energies"]["spin up"]
             spin_down_energies = energy_dict["energies"]["spin down"]
             k_resolved_spin_up_energies = spin_up_energies.reshape(self.n_kpts, -1)
@@ -506,5 +504,84 @@ class Initio:
             
             return map_array
 
-initio = Initio()
+    class Structure(pmg_struct.Structure):
+        # Subclass of the pmg.core.Structure class with convenience function exchange_atom and a graphene nanoribbon constructor added
+        def exchange_atom(self, index: int, element: str | int) -> None:
+            if isinstance(element, int): # Convert from atomic number to element symbol
+                elements = {el.Z: el.symbol for el in periodic_table.Element}
+                element = elements[element]
+            if not isinstance(index, int) or not isinstance(element, str): return
+            
+            self[index].species = element
+            return
 
+        @classmethod
+        def GNR(cls, N: int = 2, orientation: str = "armchair", n_supercell: int = 1, unit_cell_height_A: float | int = 10) -> Initio.Structure:
+            match orientation.lower():
+                case "a": orientation = "a"
+                case "armchair": orientation = "a"
+                case "z": orientation = "z"
+                case "zigzag": orientation = "z"
+                case _:
+                    print("Invalid orientaion")
+                    return
+            
+            latvec_z = unit_cell_height_A
+            xlist = np.zeros((N * 2), dtype = np.float32)
+            ylist = np.zeros((N * 2), dtype = np.float32)
+            atomlist = np.full((N * 2), "C", dtype = np.str_)
+            CC_length = 1.42
+            CH_length = 1.09
+            
+            match orientation:
+                case "a":
+                    row_to_row = .25 * CC_length * np.sqrt(3) # Row-to-row spacing in the y direction
+                    
+                    for i in range(N):
+                        xdist_from_axis = .5 * CC_length * (np.mod(i, 2) + 1)
+                        sign = 1 - 2 * np.mod(i, 2)
+                        xlist[i] = sign * xdist_from_axis
+                        xlist[i + N] = -sign * xdist_from_axis
+                        ylist[i] = 2 * i * row_to_row
+                        ylist[i + N] = 2 * i * row_to_row
+
+                    # Pad 2 hydrogen atoms to the bottom and 2 to the top of the GNR
+                    xlist = np.append(xlist, [.5 * CC_length + .5 * CH_length, -.5 * CC_length - .5 * CH_length,
+                                              -CC_length * (.25 * np.mod((N + 1) * 2, 4) + .5) + CH_length * (.5 - np.mod(N, 2)), CC_length * (.25 * np.mod((N + 1) * 2, 4) + .5) - CH_length * (.5 - np.mod(N, 2))])
+                    ylist = np.append(ylist, [-CH_length * np.sqrt(3) / 2, -CH_length * np.sqrt(3) / 2,
+                                              max(ylist) + CH_length * np.sqrt(3) / 2, max(ylist) + CH_length * np.sqrt(3) / 2])
+                    atomlist = np.append(atomlist, ["H", "H", "H", "H"])
+                    
+                    latvec_x = 3 * CC_length # Simply the unit cell length
+                    latvec_y = (N + 1) * 4 * row_to_row # The GNR hard wall boundary conditions dictate that the transverse component of the wavefunctions have nodal planes on atomic row 0 and atomic row N + 1
+                    # Thus, using this width ensures that the unit cell exactly fits the wavelength of the transverse waves and integer multiples of it
+                    # This prevents having to represent the transverse nodal plane structure with lots of different waves, also known as Fourier leakage
+                
+                case "z":
+                    row_to_row = 1.5 * CC_length # Row-to-row spacing in the y direction
+                    
+                    for i in range(0, N * 2, 2):
+                        xlist[i] = -.25 * np.sqrt(3) * CC_length * (np.mod(i, 4) - 1) # Atom to the left side of the x axis
+                        xlist[i + 1] = .25 * np.sqrt(3) * CC_length * (np.mod(i, 4) - 1) # Atom to the right side of the x axis
+                        ylist[i] = .5 * i * row_to_row - .25 * CC_length
+                        ylist[i + 1] = .5 * i * row_to_row + .25 * CC_length
+                    
+                    # Pad 1 hydrogen atom to the bottom and 1 to the top of the GNR
+                    xlist = np.append(xlist, [xlist[0], xlist[-1]])
+                    ylist = np.append(ylist, [-.25 * CC_length - CH_length, ylist[-1] + CH_length])
+                    atomlist = np.append(atomlist, ["H", "H"])
+                    
+                    latvec_x = np.sqrt(3) * CC_length # Simply the unit cell length
+                    latvec_y = (N + 1) * 2 * row_to_row # The GNR hard wall boundary conditions dictate that the transverse component of the wavefunctions have nodal planes on atomic row 0 and atomic row N + 1
+                    # Thus, using this width ensures that the unit cell exactly fits the wavelength of the transverse waves and integer multiples of it
+                    # This prevents having to represent the transverse nodal plane structure with lots of different waves, also known as Fourier leakage
+
+            ylist -= np.mean(ylist) # Shift the y coordinates so that the structure is centered around the origin
+            xlist_shifted = xlist + .5 * latvec_x # Move the atoms from being centered around the origin to being centered around the center of the unit cell
+            ylist_shifted = ylist + .5 * latvec_y
+            
+            coords = np.array([xlist_shifted, ylist_shifted, np.zeros_like(xlist) + .5 * latvec_z]).T            
+            structure = Initio.Structure(lattice = pmg_struct.Lattice.from_parameters(latvec_x, latvec_y, latvec_z, 90, 90, 90), species = atomlist,
+                                         coords = coords, coords_are_cartesian = True)
+            if isinstance(n_supercell, int): structure.make_supercell([n_supercell, 1, 1])
+            return structure
