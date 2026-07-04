@@ -379,6 +379,47 @@ class Initio:
 
         return view
 
+    def combine_structures(self, structure1, structure2, translate1: list = [0, 0, 0], translate2: list = [0, 0, 0]) -> Initio.Molecule:
+        if not isinstance(structure1, Initio.Molecule | pmg_struct.Molecule | Initio.Structure | pmg_struct.Structure):
+            print(f"Unsupported type for structure 1: {type(structure1)}")
+            return
+        if not isinstance(structure2, Initio.Molecule | pmg_struct.Molecule | Initio.Structure | pmg_struct.Structure):
+            print(f"Unsupported type for structure 2: {type(structure2)}")
+            return
+        
+        struc1_copy = structure1.copy()
+        struc2_copy = structure2.copy()
+        if np.sum(np.abs(translate1)) > .0001: struc1_copy.translate_sites(range(len(struc1_copy)), translate1)
+        if np.sum(np.abs(translate2)) > .0001: struc2_copy.translate_sites(range(len(struc2_copy)), translate2)
+        
+        all_species = list(struc1_copy.species) + list(struc2_copy.species)
+        all_coords = list(struc1_copy.cart_coords) + list(struc2_copy.cart_coords)
+        
+        molecule = Initio.Molecule(all_species, all_coords)
+        return molecule
+
+    def make_polyhedron(self, structure, sides: int = 5, size: int | float = 10., center_xy: list = [0, 0], start_angle_deg: int | float = 0.) -> Initio.Molecule:    
+        if not isinstance(structure, Initio.Molecule | pmg_struct.Molecule | Initio.Structure | pmg_struct.Structure):
+            print(f"Unsupported type for structure: {type(structure)}")
+            return
+        
+        angles = np.arange(0, 2 * np.pi, 2 * np.pi / sides)
+        angles += np.deg2rad(start_angle_deg)
+        normals = np.column_stack((np.cos(angles), np.sin(angles)))
+        
+        new_species = []
+        new_coords = []
+        for specie, coord in zip(list(structure.species), list(structure.cart_coords)):
+            atom_xy = coord[:2] - center_xy
+            projections = np.dot(normals, atom_xy)
+            
+            if np.all(projections <= size):
+                new_species.append(specie)
+                new_coords.append(coord)
+        
+        molecule = self.Molecule(species = new_species, coords = new_coords)
+        return molecule
+
     class LDOSGenerator:
         def __init__(self, wavecar_object: vaspwfc, structure: Initio.Structure, energy_range_eV: list | np.ndarray = [], gamma_meV: float = 50, n_gammas: int = 5,
                      tip_width_pm: float = 0., tip_p_fraction: float = 0., tip_height_pm = 200.):
@@ -585,3 +626,58 @@ class Initio:
                                          coords = coords, coords_are_cartesian = True)
             if isinstance(n_supercell, int): structure.make_supercell([n_supercell, 1, 1])
             return structure
+
+        def translate(self, vector: list = [0, 0, 0], frac_coords: bool = False) -> None:
+            self.translate_sites(range(len(self.sites)), vector, frac_coords = frac_coords)
+            return
+
+        def flip(self, x: bool = False, y: bool = False, z: bool = True) -> None:
+            for i, site in enumerate(self):
+                new_coords = site.coords.copy()
+                if x: new_coords[0] *= -1
+                if y: new_coords[1] *= -1
+                if z: new_coords[2] *= -1
+                self[i] = (site.species, new_coords)
+            return
+
+        def to_molecule(self) -> Initio.Molecule:
+            return Initio.Molecule(self.species, self.cart_coords)
+
+    class Molecule(pmg_struct.Molecule):
+        # Subclass of the pmg.core.Molecule class with convenience function exchange_atom
+        def exchange_atom(self, index: int, element: str | int) -> None:
+            if isinstance(element, int): # Convert from atomic number to element symbol
+                elements = {el.Z: el.symbol for el in periodic_table.Element}
+                element = elements[element]
+            if not isinstance(index, int) or not isinstance(element, str): return
+            
+            self[index].species = element
+            return
+
+        def translate(self, vector: list = [0, 0, 0]) -> None:
+            self.translate_sites(range(len(self.sites)), vector)
+            return
+        
+        def translate_to_com(self, x: bool = True, y: bool = True, z: bool = True) -> None:
+            com = self.center_of_mass
+            vector = [0, 0, 0]
+            if x: vector[0] = -com[0]
+            if y: vector[1] = -com[1]
+            if z: vector[2] = -com[2]
+            
+            self.translate(vector = vector)
+            return
+
+        def flip(self, x: bool = False, y: bool = False, z: bool = False) -> None:
+            for i, site in enumerate(self):
+                new_coords = site.coords.copy()
+                if x: new_coords[0] *= -1
+                if y: new_coords[1] *= -1
+                if z: new_coords[2] *= -1
+                self[i] = (site.species, new_coords)
+            return
+
+        def rotate(self, vector: list = [0, 0, 1], theta_deg: float = 0.) -> None:
+            self.rotate_sites(range(len(self.sites)), theta = np.deg2rad(theta_deg), axis = vector)
+            return
+
