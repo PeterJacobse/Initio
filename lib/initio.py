@@ -1,4 +1,4 @@
-import os
+import os, h5py, time, threading, logging, yaml
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from matplotlib import colors as cols
@@ -12,6 +12,68 @@ from skimage import measure
 from ase.neighborlist import NeighborList
 from ase.data.colors import jmol_colors
 from scipy.ndimage import gaussian_filter, zoom, sobel
+from PIL import Image
+
+
+
+def find_folder(target: str = "", base_folder = "C:\\DFT") -> str:
+    target_folder = None
+    sub_folders = [os.path.join(base_folder, folder) for folder in os.listdir(base_folder) if os.path.isdir(os.path.join(base_folder, folder))]
+    for sub_folder in sub_folders:
+        if os.path.isdir(os.path.join(sub_folder, target)): target_folder = os.path.join(sub_folder, target)
+    if not target_folder:
+        for sub_folder in sub_folders:
+            subsub_folders = [os.path.join(sub_folder, folder) for folder in os.listdir(sub_folder) if os.path.isdir(os.path.join(sub_folder, folder))]
+            for subsub_folder in subsub_folders:
+                if os.path.isdir(os.path.join(subsub_folder, target)): target_folder = os.path.join(subsub_folder, target)
+
+    target_folder
+    if not target_folder: raise Exception("Folder not found")
+    return target_folder
+
+def autocrop_image(file_path: str = "") -> None:
+    if not os.path.isfile(file_path):
+        logging.info("Invalid file path passed to autocrop_image")
+        return
+    
+    try:
+        img = Image.open(file_path).convert("RGBA")
+        alpha_mapped = img.convert("RGBa")
+        bbox = alpha_mapped.getbbox()
+
+        if bbox:
+            cropped_img = img.crop(bbox)
+            cropped_img.save(file_path)
+            logging.info(f"Cropped image from size {img.size} to size {cropped_img.size}.")
+        else:
+            logging.info("Unable to crop the image")
+    except:
+        logging.info("Unable to crop the image")
+    return
+
+def save_image(view: nv.NGLWidget, file_path: str = ""):
+    def save_image_when_ready(img_widget, file_path: str = ""):
+        img_bytes = None
+        
+        while not img_widget.value: time.sleep(.1)
+        img_bytes = img_widget.value.tobytes()
+        
+        if not img_bytes:
+            logging.info("Error: Could not save image.")
+            return
+
+        with open(file_path, "wb") as f:
+            f.write(img_bytes)
+        logging.info(f"Image saved to {file_path}")
+        
+        autocrop_image(file_path)
+        return
+    
+    img_widget = view.render_image(transparent = True)
+    monitor_thread = threading.Thread(target = save_image_when_ready, args = (img_widget, file_path))
+    monitor_thread.daemon = True
+    monitor_thread.start()
+    return
 
 
 
@@ -37,6 +99,11 @@ class Initio:
             case "WAVECAR": return self.get_wavecar(path)
             case "POSCAR" | "CONTCAR": return self.get_structure(path)
             case "PROCAR": return self.get_procar(path)
+            case "INCAR": return self.get_incar(path)
+            case "POTCAR": return self.get_potcar(path)
+            case "KPOINTS": return self.get_kpoints(path)
+            case "EIGENVAL": return self.get_eigenval(path)
+            case "OUTCAR": return self.get_outcar(path)
             case _:
                 print(f"Could not determine file type of provided file {path}")
                 return False
@@ -58,14 +125,67 @@ class Initio:
             structure = self.Structure.from_file(path)
             return structure
         except Exception as e:
-            print(f"Error loading the structure: {e}")
+            print(f"Could not open POSCAR / CONTCAR file: {e}")
             return False
 
-    def get_procar(self, path: str) -> vasp.Procar:
-        procar = None
-        try: procar = vasp.outputs.Procar(path)
-        except Exception as e: print(f"Could not open PROCAR file: {e}")
-        return procar
+    def get_incar(self, path: str) -> vasp.inputs.Incar:
+        try:
+            incar = vasp.Incar.from_file(path)
+            return incar
+        except Exception as e:
+            print(f"Could not opten INCAR file: {e}")
+            return False
+
+    def get_potcar(self, path: str) -> vasp.inputs.Potcar:
+        try:
+            potcar = vasp.Potcar.from_file(path)
+            return potcar
+        except Exception as e:
+            print(f"Could not open POTCAR file: {e}")
+            return False
+
+    def get_procar(self, path: str) -> vasp.outputs.Procar:
+        try:
+            procar = vasp.Procar(path)
+            return procar
+        except Exception as e:
+            print(f"Could not open PROCAR file: {e}")
+            return False
+    
+    def get_kpoints(self, path: str) -> vasp.inputs.Kpoints:
+        try:
+            kpoints = vasp.Kpoints.from_file(path)
+            return kpoints
+        except Exception as e:
+            print(f"Could not open KPOINTS file: {e}")
+            return False
+    
+    def get_eigenval(self, path: str) -> vasp.outputs.Eigenval:
+        try:
+            eigenval = vasp.outputs.Eigenval(path)
+            return eigenval
+        except Exception as e:
+            print(f"Could not open EIGENVAL file: {e}")
+            return False
+    
+    def get_outcar(self, path: str) -> vasp.outputs.Outcar:
+        try:
+            outcar = vasp.outputs.Outcar(path)
+            return outcar
+        except Exception as e:
+            print(f"Could not open OUTCAR file: {e}")
+            return False
+    
+    def show_incar(self, incar: vasp.inputs.Incar) -> None:
+        try:
+            print(incar.get_str(pretty = True))
+        except Exception as e:
+            print(f"Error: {e}")
+        return
+
+    def bands_within_range(self, eigenvalues: vasp.outputs.Outcar) -> list:
+        
+        return
 
     def DOS_from_energies(self, eigenenergies: list | np.ndarray = [], gamma = None, sigma = None, energy_range = None, points = None, dE: float = 0.1, weights: list | np.ndarray = []) -> np.ndarray:
         use_weights = False
@@ -119,15 +239,15 @@ class Initio:
         occs_up = eigenstate_dict["occupations"]["spin up"]
         occs_down = eigenstate_dict["occupations"]["spin down"]
         
-        LUMO_up_index = int(np.where(occs_up < .5)[0][0])
-        HOMO_up_index = LUMO_up_index - 1
-        LUMO_down_index = int(np.where(occs_down < .5)[0][0])
-        HOMO_down_index = LUMO_down_index - 1
+        HOMO_up_index = int(np.where(occs_up < .5)[0][0])
+        LUMO_up_index = HOMO_up_index + 1
+        HOMO_down_index = int(np.where(occs_down < .5)[0][0])
+        LUMO_down_index = HOMO_down_index + 1        
         
-        HOMO_up_energy = float(bands_up[HOMO_up_index])
-        HOMO_down_energy = float(bands_down[HOMO_down_index])
-        LUMO_up_energy = float(bands_up[LUMO_up_index])
-        LUMO_down_energy = float(bands_down[LUMO_down_index])
+        HOMO_up_energy = float(bands_up[HOMO_up_index] - 1)
+        HOMO_down_energy = float(bands_down[HOMO_down_index] - 1)
+        LUMO_up_energy = float(bands_up[LUMO_up_index] - 1)
+        LUMO_down_energy = float(bands_down[LUMO_down_index] - 1)
         
         return {"HOMO_up_index": HOMO_up_index, "HOMO_down_index": HOMO_down_index, "LUMO_up_index": LUMO_up_index, "LUMO_down_index": LUMO_down_index,
                 "HOMO_up_energy": HOMO_up_energy, "HOMO_down_energy": HOMO_down_energy, "LUMO_up_energy": LUMO_up_energy, "LUMO_down_energy": LUMO_down_energy}
@@ -398,7 +518,7 @@ class Initio:
         molecule = Initio.Molecule(all_species, all_coords)
         return molecule
 
-    def make_polyhedron(self, structure, sides: int = 5, size: int | float = 10., center_xy: list = [0, 0], start_angle_deg: int | float = 0.) -> Initio.Molecule:    
+    def make_polyhedron(self, structure, sides: int = 5, size: int | float = 10., center_xy: list = [0, 0], start_angle_deg: int | float = 0.) -> Initio.Molecule:
         if not isinstance(structure, Initio.Molecule | pmg_struct.Molecule | Initio.Structure | pmg_struct.Structure):
             print(f"Unsupported type for structure: {type(structure)}")
             return
@@ -419,6 +539,99 @@ class Initio:
         
         molecule = self.Molecule(species = new_species, coords = new_coords)
         return molecule
+
+    def find_supercell_matrix(self, primitive_structure, supercell_structure) -> tuple[np.ndarray, np.ndarray]:
+        try:
+            prim_vecs = primitive_structure.lattice.matrix
+            supercell_vecs = supercell_structure.lattice.matrix
+            M_raw = np.dot(supercell_vecs, np.linalg.inv(prim_vecs))
+            return (np.astype(np.round(M_raw), int), M_raw)
+        except:
+            return False
+
+    def generate_unfolding_calculation(self, supercell_folder: str = None, primitive_folder: str = None, transformation_matrix: np.ndarray = np.eye(3, dtype = int),
+                                       k_path_fractional = np.array([[0.0, 0.0, 0.0], [0.5, 0.0, 0.0], [1.0/3, 1.0/3, 0.0], [0.0, 0.0, 0.0]]), nseg: int = 40) -> None:
+        try:
+            if not isinstance(supercell_folder, str) or not os.path.isdir(supercell_folder):
+                raise Exception("Invalid supercell calculation folder")
+            if not isinstance(primitive_folder, str) or not os.path.isdir(primitive_folder):
+                raise Exception("Invalid primitive calculation folder")
+            
+            
+            
+            # Create the 'scf' and 'unfolding' folders and copy the structures
+            supercell_struc: Initio.Structure = self.read_vasp_file(os.path.join(supercell_folder, "CONTCAR"))
+            scf_folder = os.path.join(supercell_folder, "scf")
+            if not os.path.isdir(scf_folder): os.mkdir(scf_folder) # Create the SCF folder
+            supercell_struc.to_file(os.path.join(scf_folder, "POSCAR"))
+            
+            unfolding_folder = os.path.join(supercell_folder, "unfolding")
+            if not os.path.isdir(unfolding_folder): os.mkdir(unfolding_folder) # Create the unfolding folder            
+            supercell_struc.to_file(os.path.join(unfolding_folder, "POSCAR"))
+
+            
+            
+            # Retrieve the supercell transformation matrix from the supercell structure and the primitive cell structure
+            prim_struc: Initio.Structure = self.read_vasp_file(os.path.join(primitive_folder, "CONTCAR"))
+            (transformation_matrix, transformation_matrix_raw) = self.find_supercell_matrix(prim_struc, supercell_struc)
+            print("\nI found the following transformation matrix from primitive to supercell:\n")
+            print(f"{transformation_matrix_raw}")
+            
+            
+            
+            # Get the INCAR from the supercell calculation            
+            supercell_incar: vasp.Incar = self.read_vasp_file(os.path.join(supercell_folder, "INCAR"))            
+            print("\nI found the following INCAR parameters for the supercell calculation:\n")
+            self.show_incar(incar)
+            
+            # Adapt the INCAR for the single-point SCF calculation and subsequent unfolding calculation                        
+            supercell_incar["LCHARG"] = True
+            supercell_incar["LORBIT"] = False
+            supercell_incar["LWAVE"] = True
+            supercell_incar.write_file(os.path.join(scf_folder, "INCAR"))
+
+            supercell_incar["LCHARG"] = False
+            supercell_incar["ICHARG"] = 11
+            supercell_incar["LORBIT"] = 11
+            supercell_incar["LWAVE"] = True
+            supercell_incar.write_file(os.path.join(unfolding_folder, "INCAR"))
+            
+            
+            
+            # Copy the POTCARs
+            supercell_potcar: vasp.inputs.Potcar = self.read_vasp_file(os.path.join(supercell_folder, "POTCAR"))
+            supercell_potcar.write_file(os.path.join(scf_folder, "POTCAR"))
+            supercell_potcar.write_file(os.path.join(unfolding_folder, "POTCAR"))
+
+
+            
+            # Create the KPOINTS files
+            supercell_kpoints: vasp.Kpoints = self.read_vasp_file(os.path.join(supercell_folder, "KPOINTS"))
+            supercell_kpoints.write_file(os.path.join(scf_folder, "KPOINTS"))
+            
+            kpts_prim = make_kpath(k_path_fractional, nseg = nseg)            
+            K_in_sup = []
+            for k in kpts_prim:
+                K, G = find_K_from_k(k, transformation_matrix)
+                K_in_sup.append(K)
+            reduced_K, k_map = removeDuplicateKpoints(K_in_sup, return_map = True)
+            weights = [1] * len(reduced_K)
+            
+            kpoints_obj = vasp.Kpoints(comment = "Unfolding supercell k-points generated via VaspBandUnfolding and Initio", num_kpts = len(reduced_K),
+                                       style = vasp.Kpoints.supported_modes.Reciprocal, kpts = reduced_K, kpts_weights = weights)
+            kpoints_obj.write_file(os.path.join(unfolding_folder, "KPOINTS"))
+            
+            with open(os.path.join(unfolding_folder, "unfolding_parameters.yml"), "w") as f:
+                yaml.safe_dump({"transformation_matrix": transformation_matrix.tolist(), "k_map": k_map.tolist()}, f)
+            
+            print("\nI found the structure, KPOINTS and POTCAR of the supercell calculation and copied them to the new folders 'scf' and 'unfolding'.")
+            print("Please submit the job in the 'scf' folder to VASP first.")
+            print("When completed, run Initio.scf_to_unfolding to finish setting up the 'unfolding' folder for the band unfolding calculation.")
+            
+        except Exception as e:
+            print(f"Error encountered while generating an unfolding claculation: {e}")
+        
+        return
 
     class LDOSGenerator:
         def __init__(self, wavecar_object: vaspwfc, structure: Initio.Structure, energy_range_eV: list | np.ndarray = [], gamma_meV: float = 50, n_gammas: int = 5,
@@ -680,4 +893,3 @@ class Initio:
         def rotate(self, vector: list = [0, 0, 1], theta_deg: float = 0.) -> None:
             self.rotate_sites(range(len(self.sites)), theta = np.deg2rad(theta_deg), axis = vector)
             return
-
