@@ -3,16 +3,18 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from matplotlib import colors as cols
 import numpy as np
-from . import vaspwfc
+from skimage import measure
+from scipy.ndimage import gaussian_filter, zoom, sobel
+from PIL import Image
 import pymatgen.core.structure as pmg_struct
 from pymatgen.core import periodic_table
 from pymatgen.io import vasp, ase
 import nglview as nv
-from skimage import measure
 from ase.neighborlist import NeighborList
 from ase.data.colors import jmol_colors
-from scipy.ndimage import gaussian_filter, zoom, sobel
-from PIL import Image
+from unfold import make_kpath, find_K_from_k, removeDuplicateKpoints, unfold
+from . import vaspwfc
+from procar import procar as unfold_procar
 
 
 
@@ -151,7 +153,7 @@ class Initio:
         except Exception as e:
             print(f"Could not open PROCAR file: {e}")
             return False
-    
+
     def get_kpoints(self, path: str) -> vasp.inputs.Kpoints:
         try:
             kpoints = vasp.Kpoints.from_file(path)
@@ -159,7 +161,7 @@ class Initio:
         except Exception as e:
             print(f"Could not open KPOINTS file: {e}")
             return False
-    
+
     def get_eigenval(self, path: str) -> vasp.outputs.Eigenval:
         try:
             eigenval = vasp.outputs.Eigenval(path)
@@ -167,7 +169,7 @@ class Initio:
         except Exception as e:
             print(f"Could not open EIGENVAL file: {e}")
             return False
-    
+
     def get_outcar(self, path: str) -> vasp.outputs.Outcar:
         try:
             outcar = vasp.outputs.Outcar(path)
@@ -175,7 +177,7 @@ class Initio:
         except Exception as e:
             print(f"Could not open OUTCAR file: {e}")
             return False
-    
+
     def show_incar(self, incar: vasp.inputs.Incar) -> None:
         try:
             print(incar.get_str(pretty = True))
@@ -549,8 +551,7 @@ class Initio:
         except:
             return False
 
-    def generate_unfolding_calculation(self, supercell_folder: str = None, primitive_folder: str = None, transformation_matrix: np.ndarray = np.eye(3, dtype = int),
-                                       k_path_fractional = np.array([[0.0, 0.0, 0.0], [0.5, 0.0, 0.0], [1.0/3, 1.0/3, 0.0], [0.0, 0.0, 0.0]]), nseg: int = 40) -> None:
+    def generate_unfolding_calculation(self, supercell_folder: str = None, primitive_folder: str = None, k_path_fractional = np.array([[0.0, 0.0, 0.0], [0.5, 0.0, 0.0], [1.0/3, 1.0/3, 0.0], [0.0, 0.0, 0.0]]), nseg: int = 40) -> None:
         try:
             if not isinstance(supercell_folder, str) or not os.path.isdir(supercell_folder):
                 raise Exception("Invalid supercell calculation folder")
@@ -560,7 +561,11 @@ class Initio:
             
             
             # Create the 'scf' and 'unfolding' folders and copy the structures
-            supercell_struc: Initio.Structure = self.read_vasp_file(os.path.join(supercell_folder, "CONTCAR"))
+            contcar_file = os.path.join(supercell_folder, "CONTCAR")
+            if not os.path.isfile(contcar_file):
+                raise Exception("No valid CONTCAR file found of the supercell")
+            
+            supercell_struc: Initio.Structure = self.read_vasp_file(contcar_file)
             scf_folder = os.path.join(supercell_folder, "scf")
             if not os.path.isdir(scf_folder): os.mkdir(scf_folder) # Create the SCF folder
             supercell_struc.to_file(os.path.join(scf_folder, "POSCAR"))
@@ -572,7 +577,11 @@ class Initio:
             
             
             # Retrieve the supercell transformation matrix from the supercell structure and the primitive cell structure
-            prim_struc: Initio.Structure = self.read_vasp_file(os.path.join(primitive_folder, "CONTCAR"))
+            contcar_file = os.path.join(primitive_folder, "CONTCAR")
+            if not os.path.isfile(contcar_file):
+                raise Exception("No valid CONTCAR file found of the primitive cell")
+            
+            prim_struc: Initio.Structure = self.read_vasp_file(contcar_file)
             (transformation_matrix, transformation_matrix_raw) = self.find_supercell_matrix(prim_struc, supercell_struc)
             print("\nI found the following transformation matrix from primitive to supercell:\n")
             print(f"{transformation_matrix_raw}")
@@ -582,34 +591,45 @@ class Initio:
             # Get the INCAR from the supercell calculation            
             supercell_incar: vasp.Incar = self.read_vasp_file(os.path.join(supercell_folder, "INCAR"))            
             print("\nI found the following INCAR parameters for the supercell calculation:\n")
-            self.show_incar(incar)
+            self.show_incar(supercell_incar)
             
-            # Adapt the INCAR for the single-point SCF calculation and subsequent unfolding calculation                        
+            # Adapt the INCAR for the single-point SCF calculation and subsequent unfolding calculation
             supercell_incar["LCHARG"] = True
             supercell_incar["LORBIT"] = False
-            supercell_incar["LWAVE"] = True
+            supercell_incar["LWAVE"] = False # Do not generate a WAVECAR at this time. Instead, use the Eigenvalues to parse which bands to use later and generate the WAVECAR only at the unfolding stage.
+            supercell_incar["NSW"] = 0
+            supercell_incar["IBRION"] = -1
             supercell_incar.write_file(os.path.join(scf_folder, "INCAR"))
 
             supercell_incar["LCHARG"] = False
             supercell_incar["ICHARG"] = 11
             supercell_incar["LORBIT"] = 11
-            supercell_incar["LWAVE"] = True
+            supercell_incar["LWAVE"] = True            
             supercell_incar.write_file(os.path.join(unfolding_folder, "INCAR"))
+            print("\nSingle-point SCF calculation INCAR file written to 'scf' directory, and NSCF calculation INCAR written to 'unfolding' directory.\n")
             
             
             
             # Copy the POTCARs
-            supercell_potcar: vasp.inputs.Potcar = self.read_vasp_file(os.path.join(supercell_folder, "POTCAR"))
+            potcar_file = os.path.join(supercell_folder, "POTCAR")
+            if not os.path.isfile(potcar_file):
+                raise Exception("Missing POTCAR")
+            supercell_potcar: vasp.inputs.Potcar = self.read_vasp_file(potcar_file)
             supercell_potcar.write_file(os.path.join(scf_folder, "POTCAR"))
             supercell_potcar.write_file(os.path.join(unfolding_folder, "POTCAR"))
 
 
             
             # Create the KPOINTS files
-            supercell_kpoints: vasp.Kpoints = self.read_vasp_file(os.path.join(supercell_folder, "KPOINTS"))
+            kpoints_file = os.path.join(supercell_folder, "KPOINTS")
+            if os.path.isfile(kpoints_file):
+                supercell_kpoints: vasp.Kpoints = self.read_vasp_file(kpoints_file)
+            else: # No KPOINTS found: fall back to generating a gamma-point calculation
+                print("No KPOINTS found in supercell calculation.\nFalling back to generating a gamma-point calculation file")
+                supercell_kpoints = vasp.inputs.Kpoints.gamma_automatic()
             supercell_kpoints.write_file(os.path.join(scf_folder, "KPOINTS"))
             
-            kpts_prim = make_kpath(k_path_fractional, nseg = nseg)            
+            kpts_prim = make_kpath(k_path_fractional, nseg = nseg) # Structure of the KPOINTS as required by the VASPbandunfolding library
             K_in_sup = []
             for k in kpts_prim:
                 K, G = find_K_from_k(k, transformation_matrix)
@@ -624,7 +644,7 @@ class Initio:
             with open(os.path.join(unfolding_folder, "unfolding_parameters.yml"), "w") as f:
                 yaml.safe_dump({"transformation_matrix": transformation_matrix.tolist(), "k_map": k_map.tolist()}, f)
             
-            print("\nI found the structure, KPOINTS and POTCAR of the supercell calculation and copied them to the new folders 'scf' and 'unfolding'.")
+            print("\nI found the structure and POTCAR of the supercell calculation and copied them to the new folders 'scf' and 'unfolding'.")
             print("Please submit the job in the 'scf' folder to VASP first.")
             print("When completed, run Initio.scf_to_unfolding to finish setting up the 'unfolding' folder for the band unfolding calculation.")
             
@@ -893,3 +913,4 @@ class Initio:
         def rotate(self, vector: list = [0, 0, 1], theta_deg: float = 0.) -> None:
             self.rotate_sites(range(len(self.sites)), theta = np.deg2rad(theta_deg), axis = vector)
             return
+
