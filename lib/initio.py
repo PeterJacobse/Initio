@@ -624,6 +624,7 @@ class Initio:
 
 
 
+    # IO
     def read_vasp_file(self, path: str) -> vaspwfc | Initio.Structure | bool:
         base_name = os.path.basename(path)
         
@@ -715,10 +716,53 @@ class Initio:
             print(f"Error: {e}")
         return
 
-    def bands_within_range(self, eigenvalues: vasp.outputs.Outcar) -> list:
-        
-        return
 
+
+    # Structure manipulation
+    def combine_structures(self, structure1, structure2, translate1: list = [0, 0, 0], translate2: list = [0, 0, 0]) -> Initio.Molecule:
+        if not isinstance(structure1, Initio.Molecule | pmg_struct.Molecule | Initio.Structure | pmg_struct.Structure):
+            print(f"Unsupported type for structure 1: {type(structure1)}")
+            return
+        if not isinstance(structure2, Initio.Molecule | pmg_struct.Molecule | Initio.Structure | pmg_struct.Structure):
+            print(f"Unsupported type for structure 2: {type(structure2)}")
+            return
+        
+        struc1_copy = structure1.copy()
+        struc2_copy = structure2.copy()
+        if np.sum(np.abs(translate1)) > .0001: struc1_copy.translate_sites(range(len(struc1_copy)), translate1)
+        if np.sum(np.abs(translate2)) > .0001: struc2_copy.translate_sites(range(len(struc2_copy)), translate2)
+        
+        all_species = list(struc1_copy.species) + list(struc2_copy.species)
+        all_coords = list(struc1_copy.cart_coords) + list(struc2_copy.cart_coords)
+        
+        molecule = Initio.Molecule(all_species, all_coords)
+        return molecule
+
+    def make_polyhedron(self, structure, sides: int = 5, size: int | float = 10., center_xy: list = [0, 0], start_angle_deg: int | float = 0.) -> Initio.Molecule:
+        if not isinstance(structure, Initio.Molecule | pmg_struct.Molecule | Initio.Structure | pmg_struct.Structure):
+            print(f"Unsupported type for structure: {type(structure)}")
+            return
+        
+        angles = np.arange(0, 2 * np.pi, 2 * np.pi / sides)
+        angles += np.deg2rad(start_angle_deg)
+        normals = np.column_stack((np.cos(angles), np.sin(angles)))
+        
+        new_species = []
+        new_coords = []
+        for specie, coord in zip(list(structure.species), list(structure.cart_coords)):
+            atom_xy = coord[:2] - center_xy
+            projections = np.dot(normals, atom_xy)
+            
+            if np.all(projections <= size):
+                new_species.append(specie)
+                new_coords.append(coord)
+        
+        molecule = self.Molecule(species = new_species, coords = new_coords)
+        return molecule
+
+
+
+    # Energy data manipulation
     def DOS_from_energies(self, eigenenergies: list | np.ndarray = [], gamma = None, sigma = None, energy_range = None, points = None, dE: float = 0.1, weights: list | np.ndarray = []) -> np.ndarray:
         use_weights = False
         
@@ -832,6 +876,71 @@ class Initio:
         
         return (LDOS_up_occ, LDOS_up_unocc, LDOS_down_occ, LDOS_down_unocc)
 
+    def get_band_indices(self, calculation_path: str, energy_range: list | np.ndarray) -> tuple[float, int, int]:
+        try:
+            if not isinstance(calculation_path, str) or not os.path.isdir(calculation_path):
+                print("No valid calculation path given")
+                raise Exception()
+            
+            eigenval = self.read_vasp_file(os.path.join(calculation_path, "EIGENVAL"))
+            outcar = vasp.outputs.Outcar(os.path.join(calculation_path, "OUTCAR"))
+            
+            Fermi_level = outcar.efermi
+            first_spin_channel = list(eigenval.eigenvalues.keys())[0]
+            gamma_bands = eigenval.eigenvalues[first_spin_channel][0]
+
+            # Enumerate to track VASP band indices (1-indexed for standard VASP reference)
+            matching_indices = []
+            for idx, band in enumerate(gamma_bands, start=1):
+                energy = band[0]
+                if np.min(energy_range) <= energy <= np.max(energy_range):
+                    matching_indices.append(idx)
+
+            if not matching_indices:
+                return (Fermi_level, 0, 0)
+
+            min_band = min(matching_indices)
+            max_band = max(matching_indices)
+            
+            return (Fermi_level, min_band, max_band)
+        
+        except Exception as e:
+            print("Error trying to retrieve band data from the EIGENVAL and OUTCAR")
+            return (0, 0, 0)
+
+    def clean_kpath(self, kpath: list | np.ndarray, crystal_type: str = "hexagonal") -> np.ndarray:
+        if not isinstance(kpath, list | np.ndarray):
+            raise Exception(f"Invalid k-path provided to clean-kpath: {kpath}")
+        
+        cleaned_kpath = []
+        for kpoint in kpath:
+            match kpoint:
+                case str() if kpoint.lower() == "gamma": cleaned_kpath.append([0, 0, 0])
+                case str() if kpoint.lower() == "m": cleaned_kpath.append([.5, 0, 0])
+                case str() if kpoint.lower() == "k":
+                    if crystal_type == "hexagonal": cleaned_kpath.append([1/3, 1/3, 0])
+                case str() if kpoint.lower() == "x":
+                    if crystal_type == "hexagonal": cleaned_kpath.append([0, .5, .5])
+                    elif crystal_type == "orthorhombic": cleaned_kpath.append([.5, 0, 0])
+                case str() if kpoint.lower() == "a": cleaned_kpath.append([0, 0, .5])
+                case str() if kpoint.lower() == "l":
+                    if crystal_type == "hexagonal": cleaned_kpath.append([.5, 0, .5])            
+                case str() if kpoint.lower() == "h":
+                    if crystal_type == "hexagonal": cleaned_kpath.append([1/3, 1/3, .5])
+                case str() if kpoint.lower() == "y":
+                    if crystal_type == "orthorhombic": cleaned_kpath.append([0, .5, 0])
+                case str() if kpoint.lower() == "z":
+                    if crystal_type == "orthorhombic": cleaned_kpath.append([0, 0, .5])
+                case list():
+                    if len(kpoint) == 3 and isinstance(kpoint[0], float | int): cleaned_kpath.append(kpoint)
+                case _:
+                    print(f"Ignoring unrecognized kpoint in kpath: {kpoint}")
+        
+        return np.array(cleaned_kpath, dtype = float)
+
+
+
+    # Visualization
     def DOS_plot(self, wavecar_object: vaspwfc, *args, **kwargs) -> plt.Figure:
         colors = kwargs.pop("colors", None)
         
@@ -1031,48 +1140,10 @@ class Initio:
 
         return view
 
-    def combine_structures(self, structure1, structure2, translate1: list = [0, 0, 0], translate2: list = [0, 0, 0]) -> Initio.Molecule:
-        if not isinstance(structure1, Initio.Molecule | pmg_struct.Molecule | Initio.Structure | pmg_struct.Structure):
-            print(f"Unsupported type for structure 1: {type(structure1)}")
-            return
-        if not isinstance(structure2, Initio.Molecule | pmg_struct.Molecule | Initio.Structure | pmg_struct.Structure):
-            print(f"Unsupported type for structure 2: {type(structure2)}")
-            return
-        
-        struc1_copy = structure1.copy()
-        struc2_copy = structure2.copy()
-        if np.sum(np.abs(translate1)) > .0001: struc1_copy.translate_sites(range(len(struc1_copy)), translate1)
-        if np.sum(np.abs(translate2)) > .0001: struc2_copy.translate_sites(range(len(struc2_copy)), translate2)
-        
-        all_species = list(struc1_copy.species) + list(struc2_copy.species)
-        all_coords = list(struc1_copy.cart_coords) + list(struc2_copy.cart_coords)
-        
-        molecule = Initio.Molecule(all_species, all_coords)
-        return molecule
 
-    def make_polyhedron(self, structure, sides: int = 5, size: int | float = 10., center_xy: list = [0, 0], start_angle_deg: int | float = 0.) -> Initio.Molecule:
-        if not isinstance(structure, Initio.Molecule | pmg_struct.Molecule | Initio.Structure | pmg_struct.Structure):
-            print(f"Unsupported type for structure: {type(structure)}")
-            return
-        
-        angles = np.arange(0, 2 * np.pi, 2 * np.pi / sides)
-        angles += np.deg2rad(start_angle_deg)
-        normals = np.column_stack((np.cos(angles), np.sin(angles)))
-        
-        new_species = []
-        new_coords = []
-        for specie, coord in zip(list(structure.species), list(structure.cart_coords)):
-            atom_xy = coord[:2] - center_xy
-            projections = np.dot(normals, atom_xy)
-            
-            if np.all(projections <= size):
-                new_species.append(specie)
-                new_coords.append(coord)
-        
-        molecule = self.Molecule(species = new_species, coords = new_coords)
-        return molecule
 
-    def find_supercell_matrix(self, primitive_structure, supercell_structure) -> tuple[np.ndarray, np.ndarray]:
+    # Unfolding
+    def find_supercell_matrix(self, primitive_structure: Initio.Structure, supercell_structure: Initio.Structure) -> tuple[np.ndarray, np.ndarray]:
         try:
             prim_vecs = primitive_structure.lattice.matrix
             supercell_vecs = supercell_structure.lattice.matrix
@@ -1081,7 +1152,27 @@ class Initio:
         except:
             return False
 
-    def generate_unfolding_calculation(self, supercell_folder: str = None, primitive_folder: str = None, k_path_fractional = np.array([[0.0, 0.0, 0.0], [0.5, 0.0, 0.0], [1.0/3, 1.0/3, 0.0], [0.0, 0.0, 0.0]]), nseg: int = 40, suppress: bool = False) -> None:
+    def generate_k_mapping(self, transformation_matrix: np.ndarray = np.eye(3), kpath: list | np.ndarray = [], crystal_type: str = "hexagonal", nseg: int = 12) -> tuple[np.ndarray, np.ndarray]:
+        k_path_fractional = initio.clean_kpath(kpath = kpath, crystal_type = crystal_type)
+
+        kpts_prim = make_kpath(k_path_fractional, nseg = nseg) # Structure of the KPOINTS as required by the VASPbandunfolding library
+        K_in_sup = []
+        for k in kpts_prim:
+            K, G = find_K_from_k(k, transformation_matrix)
+            K_in_sup.append(K)
+        reduced_K, k_map = removeDuplicateKpoints(K_in_sup, return_map = True)
+        return (reduced_K, k_map)
+
+    def test_k_mappings(self, transformation_matrix: np.ndarray, kpath: list | np.ndarray = [], crystal_type: str = "", npoints_max: int = 40):
+        lengths = []
+        npoints = []
+        for n in range(npoints_max):
+            (reduced_K, k_map) = initio.generate_k_mapping(transformation_matrix, kpath = kpath, crystal_type = crystal_type, nseg = n)
+            lengths.append(len(k_map))
+            npoints.append(n)
+        return (npoints, lengths)
+
+    def generate_unfolding_calculation(self, supercell_folder: str = None, primitive_folder: str = None, kpath: list | np.ndarray = ["gamma", "k", "m", "gamma"], crystal_type: str = "hexagonal", nseg: int = 12, suppress: bool = False) -> None:
         try:
             if not isinstance(supercell_folder, str) or not os.path.isdir(supercell_folder):
                 raise Exception("Invalid supercell calculation folder")
@@ -1163,7 +1254,9 @@ class Initio:
                 supercell_kpoints = vasp.inputs.Kpoints.gamma_automatic()
             if not suppress: supercell_kpoints.write_file(os.path.join(scf_folder, "KPOINTS"))
             
-            kpts_prim = make_kpath(k_path_fractional, nseg = nseg) # Structure of the KPOINTS as required by the VASPbandunfolding library
+            kpath = self.clean_kpath(kpath, crystal_type = crystal_type)            
+            (reduced_K, k_map) = self.generate_k_mapping(transformation_matrix, kpath = kpath, crystal_type = crystal_type, nseg = nseg)            
+            kpts_prim = make_kpath(kpath, nseg = nseg) # Structure of the KPOINTS as required by the VASPbandunfolding library
             K_in_sup = []
             for k in kpts_prim:
                 K, G = find_K_from_k(k, transformation_matrix)
@@ -1189,38 +1282,6 @@ class Initio:
         
         return
 
-    def get_band_indices(self, calculation_path: str, energy_range: list | np.ndarray) -> tuple[float, int, int]:
-        try:
-            if not isinstance(calculation_path, str) or not os.path.isdir(calculation_path):
-                print("No valid calculation path given")
-                raise Exception()
-            
-            eigenval = self.read_vasp_file(os.path.join(calculation_path, "EIGENVAL"))
-            outcar = vasp.outputs.Outcar(os.path.join(calculation_path, "OUTCAR"))
-            
-            Fermi_level = outcar.efermi
-            first_spin_channel = list(eigenval.eigenvalues.keys())[0]
-            gamma_bands = eigenval.eigenvalues[first_spin_channel][0]
-
-            # Enumerate to track VASP band indices (1-indexed for standard VASP reference)
-            matching_indices = []
-            for idx, band in enumerate(gamma_bands, start=1):
-                energy = band[0]
-                if np.min(energy_range) <= energy <= np.max(energy_range):
-                    matching_indices.append(idx)
-
-            if not matching_indices:
-                return (Fermi_level, 0, 0)
-
-            min_band = min(matching_indices)
-            max_band = max(matching_indices)
-            
-            return (Fermi_level, min_band, max_band)
-        
-        except Exception as e:
-            print("Error trying to retrieve band data from the EIGENVAL and OUTCAR")
-            return (0, 0, 0)
-
     def scf_to_unfolding(self, supercell_folder: str = None) -> None:
         if not isinstance(supercell_folder, str) or not os.path.isdir(supercell_folder): raise IOError("Invalid supercell calculation folder")
         
@@ -1230,7 +1291,7 @@ class Initio:
         if not os.path.isdir(unfolding_folder): raise IOError("'unfolding' folder not found")
         
         try:
-            (E_Fermi, min_band, max_band) = self.get_band_indices(scf_folder, energy_range = [-1.6, 1.6])
+            (E_Fermi, min_band, max_band) = initio.get_band_indices(scf_folder, energy_range = [-1.6, 1.6])
             print(f"{min_band = }, {max_band = }")
             
             chgcar_path = os.path.join(scf_folder, "CHGCAR")
@@ -1242,6 +1303,8 @@ class Initio:
             print(f"Error encountered while running Initio.scf_to_unfolding: {e}")
         
         return
+
+
 
     class LDOSGenerator:
         def __init__(self, wavecar_object: vaspwfc, structure: Initio.Structure, energy_range_eV: list | np.ndarray = [], gamma_meV: float = 50, n_gammas: int = 5,
@@ -1503,3 +1566,5 @@ class Initio:
         def rotate(self, vector: list = [0, 0, 1], theta_deg: float = 0.) -> None:
             self.rotate_sites(range(len(self.sites)), theta = np.deg2rad(theta_deg), axis = vector)
             return
+
+
