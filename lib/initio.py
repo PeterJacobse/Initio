@@ -1153,7 +1153,7 @@ class Initio:
             return False
 
     def generate_k_mapping(self, transformation_matrix: np.ndarray = np.eye(3), kpath: list | np.ndarray = [], crystal_type: str = "hexagonal", nseg: int = 12) -> tuple[np.ndarray, np.ndarray]:
-        k_path_fractional = initio.clean_kpath(kpath = kpath, crystal_type = crystal_type)
+        k_path_fractional = self.clean_kpath(kpath = kpath, crystal_type = crystal_type)
 
         kpts_prim = make_kpath(k_path_fractional, nseg = nseg) # Structure of the KPOINTS as required by the VASPbandunfolding library
         K_in_sup = []
@@ -1167,7 +1167,7 @@ class Initio:
         lengths = []
         npoints = []
         for n in range(npoints_max):
-            (reduced_K, k_map) = initio.generate_k_mapping(transformation_matrix, kpath = kpath, crystal_type = crystal_type, nseg = n)
+            (reduced_K, k_map) = self.generate_k_mapping(transformation_matrix, kpath = kpath, crystal_type = crystal_type, nseg = n)
             lengths.append(len(k_map))
             npoints.append(n)
         return (npoints, lengths)
