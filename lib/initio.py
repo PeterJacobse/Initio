@@ -722,10 +722,10 @@ class Initio:
     def combine_structures(self, structure1, structure2, translate1: list = [0, 0, 0], translate2: list = [0, 0, 0]) -> Initio.Molecule:
         if not isinstance(structure1, Initio.Molecule | pmg_struct.Molecule | Initio.Structure | pmg_struct.Structure):
             print(f"Unsupported type for structure 1: {type(structure1)}")
-            return
+            return self.Molecule([], [])
         if not isinstance(structure2, Initio.Molecule | pmg_struct.Molecule | Initio.Structure | pmg_struct.Structure):
             print(f"Unsupported type for structure 2: {type(structure2)}")
-            return
+            return self.Molecule([], [])
         
         struc1_copy = structure1.copy()
         struc2_copy = structure2.copy()
@@ -735,13 +735,13 @@ class Initio:
         all_species = list(struc1_copy.species) + list(struc2_copy.species)
         all_coords = list(struc1_copy.cart_coords) + list(struc2_copy.cart_coords)
         
-        molecule = Initio.Molecule(all_species, all_coords)
+        molecule = self.Molecule(all_species, all_coords)
         return molecule
 
     def make_polyhedron(self, structure, sides: int = 5, size: int | float = 10., center_xy: list = [0, 0], start_angle_deg: int | float = 0.) -> Initio.Molecule:
         if not isinstance(structure, Initio.Molecule | pmg_struct.Molecule | Initio.Structure | pmg_struct.Structure):
             print(f"Unsupported type for structure: {type(structure)}")
-            return
+            return self.Molecule([], [])
         
         angles = np.arange(0, 2 * np.pi, 2 * np.pi / sides)
         angles += np.deg2rad(start_angle_deg)
@@ -933,6 +933,8 @@ class Initio:
                     if crystal_type == "orthorhombic": cleaned_kpath.append([0, 0, .5])
                 case list():
                     if len(kpoint) == 3 and isinstance(kpoint[0], float | int): cleaned_kpath.append(kpoint)
+                case np.ndarray():
+                    if len(kpoint) == 3: cleaned_kpath.append(list(kpoint))
                 case _:
                     print(f"Ignoring unrecognized kpoint in kpath: {kpoint}")
         
@@ -967,16 +969,17 @@ class Initio:
         ax.set_ylabel("energy (eV)")
         ax.set_xticks([])
         
-        en_range = kwargs.get("energy_range")
+        en_range = kwargs.get("energy_range", [0, 1])
         ax.set_ylim(en_range[0], en_range[1])
         ax.yaxis.set_minor_locator(ticker.MultipleLocator(.1))
         
         ax.grid(True, which = "both", axis = "y", color = "gray", linewidth = 0.5, alpha = 0.5)
         return fig
 
-    def structure_plot(self, structure: Initio.Structure, max_bond_length: float = None, width: int = 800, height: int = 600, atom_size: float = .3, bond_size: float = .22,
+    def structure_plot(self, structure: Initio.Structure | Initio.Molecule, max_bond_length: float | None = None, width: int = 800, height: int = 600, atom_size: float = .3, bond_size: float = .22,
                        camera_type: str = "orthographic", flip_over: bool = False, background_color: str = "#000000") -> nv.NGLWidget:
         atoms = ase.AseAtomsAdaptor.get_atoms(structure)
+        
         Z = list(structure.atomic_numbers)
         R = structure.cart_coords
         Zcolors = np.array([.5 * rgb if atomic_number > 0 else (0, 0, 0) for atomic_number, rgb in enumerate(jmol_colors)])
@@ -986,11 +989,11 @@ class Initio:
             if 74 in Z: max_bond_length = 2.6 # Shortcut for working with TMDs
             else: max_bond_length = 1.6 # Shortcut fallback for organic stuff
 
-        cutoffs = [max_bond_length / 2.0] * len(atoms)
+        cutoffs = [max_bond_length / 2.0] * len(atoms) # type: ignore
         nl = NeighborList(cutoffs, skin = 0.0, bothways = True, self_interaction = False)
         nl.update(atoms)
         
-        view = nv.show_ase(atoms)
+        view: nv.NGLWidget = nv.show_ase(atoms)
         view.stage.set_parameters(depth_of_field = 0, fog_near = 100, fog_far = 100, camera_type = camera_type, background_color = background_color)
         view._execute_js_code("""
             var stage = this.stage;
@@ -1090,7 +1093,8 @@ class Initio:
         if not isinstance(struc_opacity, float | int) or struc_opacity < 0 or struc_opacity > 1: struc_opacity = 1.
         
         try:
-            psi: np.ndarray = zoom(wavecar_object.wfc_r(ispin = ispin, ikpt = ikpt, iband = iband), zoom = upsampling, order = 3)
+            bare_psi: np.ndarray = wavecar_object.wfc_r(ispin = ispin, ikpt = ikpt, iband = iband) # type: ignore
+            psi: np.ndarray = zoom(bare_psi, zoom = upsampling, order = 3) # type: ignore
             if flip_x: psi = np.flip(psi, axis = 0)
             if flip_y: psi = np.flip(psi, axis = 1)
             if flip_z: psi = np.flip(psi, axis = 2)
@@ -1129,7 +1133,7 @@ class Initio:
                 num_mesh_vertices = faces.size
                 flat_colors = color * num_mesh_vertices
                 
-                view.shape.add_mesh(flat_positions, flat_colors, None, flat_normals, "Isosurface")
+                view.shape.add_mesh(flat_positions, flat_colors, None, flat_normals, "Isosurface") # type: ignore
                 view.update_representation(component = len(view._ngl_component_names) - 1, repr_index = 0, side = "front", opacity = opacity, transparent = True, flatShading = False, depthWrite = True, opaqueBack = True)
         
             if flip_over: view.control.spin([1, 0, 0], np.deg2rad(180))
@@ -1143,14 +1147,43 @@ class Initio:
 
 
     # Unfolding
-    def find_supercell_matrix(self, primitive_structure: Initio.Structure, supercell_structure: Initio.Structure) -> tuple[np.ndarray, np.ndarray]:
+    def find_supercell_matrix(self, primitive_structure: Initio.Structure, supercell_structure: Initio.Structure, verbose: bool = True) -> tuple[np.ndarray, np.ndarray]:
         try:
             prim_vecs = primitive_structure.lattice.matrix
             supercell_vecs = supercell_structure.lattice.matrix
-            M_raw = np.dot(supercell_vecs, np.linalg.inv(prim_vecs))
-            return (np.astype(np.round(M_raw), int), M_raw)
+            raw_transformation_matrix = np.dot(supercell_vecs, np.linalg.inv(prim_vecs))
+            transformation_matrix = np.astype(np.round(raw_transformation_matrix), int)
+            
+            if verbose: print(f"{transformation_matrix = }, {raw_transformation_matrix}")
+            return transformation_matrix, raw_transformation_matrix
         except:
-            return False
+            return np.zeros((3, 3)), np.zeros((3, 3))
+
+    def diagonalQ(self, matrix) -> bool:
+        return not bool(np.any(matrix - np.diag(np.diag(matrix))))
+
+    def analyze_supercell_linearity(self, primitive_structure: Initio.Structure, supercell_structure: Initio.Structure, verbose: bool = True) -> tuple[bool, list[int], int]:
+        transformation_matrix, raw_transformation_matrix = self.find_supercell_matrix(primitive_structure, supercell_structure, verbose = False)
+        supercell_is_linear = self.diagonalQ(transformation_matrix) # Is the transformation linear (i.e. simply copied along the primitive cell directions without mixing to change the shape of the cell)?
+        supercell_axes: list[int] = [4] # Axis or axes along which the primitive cell was copied
+        supercell_copies: int = 1
+        
+        if supercell_is_linear:
+            [x_copies, y_copies, z_copies] = [int(transformation_matrix[dim, dim]) for dim in range(3)] # If so, these are the copies along each of the axes
+            
+            if x_copies > 1 and y_copies + z_copies < 3: supercell_axes = [0] # x axis
+            elif y_copies > 1 and x_copies + z_copies < 3: supercell_axes = [1] # y axis
+            elif z_copies > 1 and x_copies + y_copies < 3: supercell_axes = [2] # z axis
+            elif x_copies > 1 and y_copies > 1 and z_copies < 1: supercell_axes = [0, 1] # xy plane
+            else: supercell_axes = [4, 5] # Not yet implemented        
+            
+            if supercell_axes == [0]: supercell_copies = x_copies
+            if supercell_axes == [1]: supercell_copies = y_copies
+            if supercell_axes == [2]: supercell_copies = z_copies
+            if verbose: print(f"{supercell_is_linear = }; {supercell_axes = }; {supercell_copies = }")
+        else:
+            if verbose: print(f"{supercell_is_linear = }; Supercell axes and copies not well-defined.")
+        return supercell_is_linear, supercell_axes, supercell_copies
 
     def generate_k_mapping(self, transformation_matrix: np.ndarray = np.eye(3), kpath: list | np.ndarray = [], crystal_type: str = "hexagonal", nseg: int = 12) -> tuple[np.ndarray, np.ndarray]:
         k_path_fractional = self.clean_kpath(kpath = kpath, crystal_type = crystal_type)
@@ -1161,7 +1194,7 @@ class Initio:
             K, G = find_K_from_k(k, transformation_matrix)
             K_in_sup.append(K)
         reduced_K, k_map = removeDuplicateKpoints(K_in_sup, return_map = True)
-        return (reduced_K, k_map)
+        return reduced_K, k_map
 
     def test_k_mappings(self, transformation_matrix: np.ndarray, kpath: list | np.ndarray = [], crystal_type: str = "", npoints_max: int = 40):
         lengths = []
@@ -1172,7 +1205,7 @@ class Initio:
             npoints.append(n)
         return (npoints, lengths)
 
-    def generate_unfolding_calculation(self, supercell_folder: str = None, primitive_folder: str = None, kpath: list | np.ndarray = ["gamma", "k", "m", "gamma"], crystal_type: str = "hexagonal", nseg: int = 12, suppress: bool = False) -> None:
+    def generate_unfolding_calculation(self, supercell_folder: str | None = None, primitive_folder: str | None = None, kpath: list | np.ndarray = ["gamma", "k", "m", "gamma"], crystal_type: str = "hexagonal", nseg: int = 12, suppress: bool = False) -> None:
         try:
             if not isinstance(supercell_folder, str) or not os.path.isdir(supercell_folder):
                 raise Exception("Invalid supercell calculation folder")
@@ -1282,7 +1315,7 @@ class Initio:
         
         return
 
-    def scf_to_unfolding(self, supercell_folder: str = None) -> None:
+    def scf_to_unfolding(self, supercell_folder: str | None = None) -> None:
         if not isinstance(supercell_folder, str) or not os.path.isdir(supercell_folder): raise IOError("Invalid supercell calculation folder")
         
         scf_folder = os.path.join(supercell_folder, "scf")
@@ -1307,8 +1340,7 @@ class Initio:
 
 
     class LDOSGenerator:
-        def __init__(self, wavecar_object: vaspwfc, structure: Initio.Structure, energy_range_eV: list | np.ndarray = [], gamma_meV: float = 50, n_gammas: int = 5,
-                     tip_width_pm: float = 0., tip_p_fraction: float = 0., tip_height_pm = 200.):
+        def __init__(self, wavecar_object: vaspwfc, structure: Initio.Structure, energy_range_eV: list | np.ndarray = [], gamma_meV: float = 50, n_gammas: int = 5, tip_width_pm: float = 0., tip_p_fraction: float = 0., tip_height_pm = 200.):
             initio_instance = Initio()
             self.wfc = wavecar_object
             self.struc = structure
@@ -1364,17 +1396,17 @@ class Initio:
 
 
 
-        def set_tip_shape(self, width_pm: float = None, p_fraction: float = 0.) -> None:
+        def set_tip_shape(self, width_pm: float | None = None, p_fraction: float = 0.) -> None:
             if isinstance(width_pm, float | int): self.tip_width_pm = width_pm
             if isinstance(p_fraction, float | int): self.tip_p_fraction = float(np.clip(p_fraction, 0, 1))
             return
         
-        def set_tip_height(self, height_pm: float = None) -> None:
+        def set_tip_height(self, height_pm: float | None = None) -> None:
             if isinstance(height_pm, float | int): self.tip_height_pm = height_pm
             return
         
-        def get_maps(self, energy_values_meV: float | int | list | np.ndarray = 0., height_values_pm: float | int | list | np.ndarray = None,
-                     width_values_pm: float | int | list | np.ndarray = None, p_fractions: float | int | list | np.ndarray = None, output_folder: str = None) -> np.ndarray:
+        def get_maps(self, energy_values_meV: float | int | list | np.ndarray = 0., height_values_pm: float | int | list | np.ndarray | None = None,
+                     width_values_pm: float | int | list | np.ndarray | None = None, p_fractions: float | int | list | np.ndarray | None = None, output_folder: str | None = None) -> np.ndarray:
             # Create the output directory relative to the calculation folder
             if isinstance(output_folder, str): os.makedirs(output_folder, exist_ok = True)
             
@@ -1451,7 +1483,7 @@ class Initio:
                 case "zigzag": orientation = "z"
                 case _:
                     print("Invalid orientaion")
-                    return
+                    return Initio.Structure(lattice = np.eye(3), species = [], coords = [])
             
             latvec_z = unit_cell_height_A
             xlist = np.zeros((N * 2), dtype = np.float32)
@@ -1533,11 +1565,11 @@ class Initio:
         # Subclass of the pmg.core.Molecule class with convenience function exchange_atom
         def exchange_atom(self, index: int, element: str | int) -> None:
             if isinstance(element, int): # Convert from atomic number to element symbol
-                elements = {el.Z: el.symbol for el in periodic_table.Element}
+                elements = {el.Z: el.symbol for el in periodic_table.Element} # type: ignore
                 element = elements[element]
             if not isinstance(index, int) or not isinstance(element, str): return
             
-            self[index].species = element
+            self[index].species = element # type: ignore
             return
 
         def translate(self, vector: list = [0, 0, 0]) -> None:
@@ -1566,5 +1598,3 @@ class Initio:
         def rotate(self, vector: list = [0, 0, 1], theta_deg: float = 0.) -> None:
             self.rotate_sites(range(len(self.sites)), theta = np.deg2rad(theta_deg), axis = vector)
             return
-
-
