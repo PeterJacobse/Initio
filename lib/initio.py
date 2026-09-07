@@ -610,6 +610,9 @@ class UnfoldProcar(object):
 
 
 class Initio:
+    """
+    Main Initio library class
+    """
     def __init__(self):
         cm = nv.color.ColormakerRegistry
         cm.add_scheme_func('custom_carbon', '''
@@ -651,7 +654,7 @@ class Initio:
             return wfc
         except Exception as e:
             print("Error loading the wavecar")
-            return False
+            return vaspwfc()
 
     def get_structure(self, path: str) -> Initio.Structure:
         try:
@@ -719,7 +722,19 @@ class Initio:
 
 
     # Structure manipulation
-    def combine_structures(self, structure1, structure2, translate1: list = [0, 0, 0], translate2: list = [0, 0, 0]) -> Initio.Molecule:
+    def combine_structures(self, structure1: Initio.Molecule | pmg_struct.Molecule | Initio.Structure | pmg_struct.Structure, structure2: Initio.Molecule | pmg_struct.Molecule | Initio.Structure | pmg_struct.Structure, translate1: list = [0, 0, 0], translate2: list = [0, 0, 0]) -> Initio.Molecule:
+        """
+        Combine two structures into a new structure. The output is a Molecule object since the periodicity may be ambiguous when combining two different structures with different lattices.
+
+        Args:
+            structure1 (Initio.Molecule | pmg_struct.Molecule | Initio.Structure | pmg_struct.Structure): Structure 1.
+            structure2 (Initio.Molecule | pmg_struct.Molecule | Initio.Structure | pmg_struct.Structure): Structure 2.
+            translate1 (list, optional): Translate the sites of structure 1 by this amount before combining. Defaults to [0, 0, 0].
+            translate2 (list, optional): Translate the sites of structure 2 by this amount before combining. Defaults to [0, 0, 0].
+
+        Returns:
+            Initio.Molecule: Molecule that combines structure 1 and structure 2.
+        """
         if not isinstance(structure1, Initio.Molecule | pmg_struct.Molecule | Initio.Structure | pmg_struct.Structure):
             print(f"Unsupported type for structure 1: {type(structure1)}")
             return self.Molecule([], [])
@@ -738,7 +753,20 @@ class Initio:
         molecule = self.Molecule(all_species, all_coords)
         return molecule
 
-    def make_polyhedron(self, structure, sides: int = 5, size: int | float = 10., center_xy: list = [0, 0], start_angle_deg: int | float = 0.) -> Initio.Molecule:
+    def make_polyhedron(self, structure: Initio.Molecule | pmg_struct.Molecule | Initio.Structure | pmg_struct.Structure, sides: int = 5, size: int | float = 10., center_xy: list = [0, 0], start_angle_deg: int | float = 0.) -> Initio.Molecule:
+        """
+        Generate a regular polyhedral flake from a structure.
+
+        Args:
+            structure (Initio.Molecule | pmg_struct.Molecule | Initio.Structure | pmg_struct.Structure): Structure.
+            sides (int, optional): Number of edges/vertices. Defaults to 5.
+            size (int | float, optional): Size of the insribed circle. Defaults to 10..
+            center_xy (list, optional): Center. Defaults to [0, 0].
+            start_angle_deg (int | float, optional): Angle of the first edge relative to the structure. Defaults to 0.
+
+        Returns:
+            Initio.Molecule: Flake.
+        """
         if not isinstance(structure, Initio.Molecule | pmg_struct.Molecule | Initio.Structure | pmg_struct.Structure):
             print(f"Unsupported type for structure: {type(structure)}")
             return self.Molecule([], [])
@@ -978,6 +1006,23 @@ class Initio:
 
     def structure_plot(self, structure: Initio.Structure | Initio.Molecule, max_bond_length: float | None = None, width: int = 800, height: int = 600, atom_size: float = .3, bond_size: float = .22,
                        camera_type: str = "orthographic", flip_over: bool = False, background_color: str = "#000000") -> nv.NGLWidget:
+        """
+        Generates a NGLView view object that contains the structure.
+
+        Args:
+            structure (Structure, Molecule, optional): Structure. Defaults to None.
+            max_bond_length (float, optional): Max distance between atoms that is still interpreted as a bond. Defaults to 2.6.
+            atom_size (float, optional): Atom size relative to its vdW radius. Defaults to .3.
+            bond_size (float, optional): Bond size. Defaults to .22.
+            width (int, optional): Number of pixels of the outputted view. Defaults to 800.
+            height (int, optional): Number of lines of the outputted view. Defaults to 600.
+            camera_type (str, optional): "orthographic" or "perspective". Defaults to "orthographic".
+            flip_over (bool, optional): Whether to flip the camera perspective to below the xy plane. Defaults to False.
+            background_color (str, optional): Background color. Defaults to "#000000".
+
+        Returns:
+            nv.NGLWidget: NGLView view object
+        """
         atoms = ase.AseAtomsAdaptor.get_atoms(structure)
         
         Z = list(structure.atomic_numbers)
@@ -1084,11 +1129,39 @@ class Initio:
         return view
 
     def orbital_plot(self, wavecar_object: vaspwfc, ispin: int = 1, ikpt: int = 1, iband: int = 1, isolevel: float = .1, opacity: float = 1., flip_x: bool = False, flip_y: bool = False, flip_z: bool = False, upsampling: int = 1,
-                     structure: Structure = None, max_bond_length: float = 2.6, atom_size: float = .3, bond_size: float = .22, struc_opacity: float = 1.,
+                     structure: Initio.Structure | Initio.Molecule | None = None, max_bond_length: float = 2.6, atom_size: float = .3, bond_size: float = .22, struc_opacity: float = 1.,
                      width: int = 800, height: int = 600, camera_type: str = "orthographic", flip_over: bool = False, background_color: str = "#000000") -> nv.NGLWidget:
+        """
+        Generates a NGLView view object that contains the structure along with a 3D orbital contour plot of the single-particle state defined by the provided wavecar object, ispin, ikpt and iband.
+
+        Args:
+            wavecar_object (vaspwfc): Wavecar object from pyvaspwfc
+            ispin (int, optional): Spin index. Defaults to 1.
+            ikpt (int, optional): K-point index. Defaults to 1.
+            iband (int, optional): Band index. Defaults to 1.
+            isolevel (float, optional): Cut-off value of psi^2 where 3D contours are generated. Defaults to .1.
+            opacity (float, optional): Opacity of the orbitals. Defaults to 1..
+            flip_x (bool, optional): Bool to flip the wavefunction in the yz plane relative to the structure. Should not generally be used. Defaults to False.
+            flip_y (bool, optional): Bool to flip the wavefunction in the xz plane relative to the structure. Should not generally be used. Defaults to False.
+            flip_z (bool, optional): Bool to flip the wavefunction in the xy plane relative to the structure. Should not generally be used. Defaults to False.
+            upsampling (int, optional): Value to resample the cube data (numpy array) to before plotting the orbital. Higher values are more expensive but generate smoother orbitals. Defaults to 1 (output array size = 1 * input array size).
+            structure (Structure, Molecule, optional): Structure. Defaults to None.
+            max_bond_length (float, optional): Max distance between atoms that is still interpreted as a bond. Defaults to 2.6.
+            atom_size (float, optional): Atom size relative to its vdW radius. Defaults to .3.
+            bond_size (float, optional): Bond size. Defaults to .22.
+            struc_opacity (float, optional): Opacity of the structure. Defaults to 1..
+            width (int, optional): Number of pixels of the outputted view. Defaults to 800.
+            height (int, optional): Number of lines of the outputted view. Defaults to 600.
+            camera_type (str, optional): "orthographic" or "perspective". Defaults to "orthographic".
+            flip_over (bool, optional): Whether to flip the camera perspective to below the xy plane. Defaults to False.
+            background_color (str, optional): Background color. Defaults to "#000000".
+
+        Returns:
+            nv.NGLWidget: NGLView view object
+        """
         if not isinstance(wavecar_object, vaspwfc):
             print(f"Invalid wave function")
-            return
+            return nv.NGLWidget()
         if not isinstance(opacity, float | int) or opacity < 0 or opacity > 1: opacity = 1.
         if not isinstance(struc_opacity, float | int) or struc_opacity < 0 or struc_opacity > 1: struc_opacity = 1.
         
@@ -1107,7 +1180,7 @@ class Initio:
             voxel_size = np.diag(cell_size_Ang) / voxels
         except Exception as e:
             print(f"{e}")
-            return
+            return nv.NGLWidget()
         
         if isinstance(structure, Initio.Structure):
             view = self.structure_plot(structure, max_bond_length, width, height, atom_size, bond_size, camera_type, background_color = background_color)
@@ -1148,44 +1221,84 @@ class Initio:
 
     # Unfolding
     def find_supercell_matrix(self, primitive_structure: Initio.Structure, supercell_structure: Initio.Structure, verbose: bool = True) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Compares a supercell structure with a primitive structure and returns the transformation matrix needed to generate a supercell from the primitive structure that has the same size as the ssupercell structure
+
+        Args:
+            primitive_structure (Initio.Structure): Primitive structure
+            supercell_structure (Initio.Structure): Supercell structure
+            verbose (bool, optional): Whether or not to print the transformation matrix to terminal. Defaults to True.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]: The first element is the rounded transformation matrix with integer entries. The second one is the raw transformation matrix with float entries.
+        """
         try:
             prim_vecs = primitive_structure.lattice.matrix
             supercell_vecs = supercell_structure.lattice.matrix
             raw_transformation_matrix = np.dot(supercell_vecs, np.linalg.inv(prim_vecs))
             transformation_matrix = np.astype(np.round(raw_transformation_matrix), int)
             
-            if verbose: print(f"{transformation_matrix = }, {raw_transformation_matrix}")
+            if verbose: print(f"{transformation_matrix = }\n{raw_transformation_matrix = }")
             return transformation_matrix, raw_transformation_matrix
         except:
             return np.zeros((3, 3)), np.zeros((3, 3))
 
-    def diagonalQ(self, matrix) -> bool:
+    def diagonalQ(self, matrix: np.ndarray) -> bool:
+        """
+        Returns False if matrix has off-diagonal entries, and True otherwise.
+
+        Args:
+            matrix (np.ndarray): input matrix
+
+        Returns:
+            bool
+        """
         return not bool(np.any(matrix - np.diag(np.diag(matrix))))
 
-    def analyze_supercell_linearity(self, primitive_structure: Initio.Structure, supercell_structure: Initio.Structure, verbose: bool = True) -> tuple[bool, list[int], int]:
+    def analyze_supercell_linearity(self, primitive_structure: Initio.Structure, supercell_structure: Initio.Structure, verbose: bool = True) -> tuple[bool, list[int], list[int]]:
+        """
+        Analyzes whether the supercell structure can be generated by linearly copying the primitive structure along its lattice vectors.
+        If False, 
+
+        Args:
+            primitive_structure (Initio.Structure): Primitive structure.
+            supercell_structure (Initio.Structure): Supercell structure.
+            verbose (bool, optional): Whether to print the information to terminal. Defaults to True.
+
+        Returns:
+            tuple[bool, list[int], int]: Whether the supercell is linear (bool), what the axes are along which the primitive cell is copied (list of integers), how many copies along each lattice vector (integer).
+        """
         transformation_matrix, raw_transformation_matrix = self.find_supercell_matrix(primitive_structure, supercell_structure, verbose = False)
+        supercell_copies = [int(value) for value in np.diag(transformation_matrix)]
         supercell_is_linear = self.diagonalQ(transformation_matrix) # Is the transformation linear (i.e. simply copied along the primitive cell directions without mixing to change the shape of the cell)?
-        supercell_axes: list[int] = [4] # Axis or axes along which the primitive cell was copied
-        supercell_copies: int = 1
+        supercell_axes: list[int] = [4] # Axis or axes along which the primitive cell was copied. [4] is a dummy (fallback) value.
         
         if supercell_is_linear:
-            [x_copies, y_copies, z_copies] = [int(transformation_matrix[dim, dim]) for dim in range(3)] # If so, these are the copies along each of the axes
+            [x_copies, y_copies, z_copies] = supercell_copies
             
             if x_copies > 1 and y_copies + z_copies < 3: supercell_axes = [0] # x axis
             elif y_copies > 1 and x_copies + z_copies < 3: supercell_axes = [1] # y axis
             elif z_copies > 1 and x_copies + y_copies < 3: supercell_axes = [2] # z axis
             elif x_copies > 1 and y_copies > 1 and z_copies < 1: supercell_axes = [0, 1] # xy plane
-            else: supercell_axes = [4, 5] # Not yet implemented        
-            
-            if supercell_axes == [0]: supercell_copies = x_copies
-            if supercell_axes == [1]: supercell_copies = y_copies
-            if supercell_axes == [2]: supercell_copies = z_copies
+            else: supercell_axes = [4, 5] # Not yet implemented
             if verbose: print(f"{supercell_is_linear = }; {supercell_axes = }; {supercell_copies = }")
         else:
             if verbose: print(f"{supercell_is_linear = }; Supercell axes and copies not well-defined.")
         return supercell_is_linear, supercell_axes, supercell_copies
 
     def generate_k_mapping(self, transformation_matrix: np.ndarray = np.eye(3), kpath: list | np.ndarray = [], crystal_type: str = "hexagonal", nseg: int = 12) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Generate K-points of the supercell Brillouin zone where the band structure should be sampled in order to have the band structure fold back properly onto the k-points of the primitive cell.
+
+        Args:
+            transformation_matrix (np.ndarray, optional): Supercell transformation matrix. Defaults to np.eye(3).
+            kpath (list | np.ndarray, optional): k-points of the primitive cell. Defaults to [].
+            crystal_type (str, optional): Crystal type. Defaults to "hexagonal".
+            nseg (int, optional): Resolution. Defaults to 12.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]: k-points of the supercell, and a mapping from K to k
+        """
         k_path_fractional = self.clean_kpath(kpath = kpath, crystal_type = crystal_type)
 
         kpts_prim = make_kpath(k_path_fractional, nseg = nseg) # Structure of the KPOINTS as required by the VASPbandunfolding library
@@ -1340,6 +1453,10 @@ class Initio:
 
 
     class LDOSGenerator:
+        """
+        Generates an object that holds information on the single-particle wavefunctions.
+        This information is used to calculate simulated local density of states or scanning tunneling microscopy maps, given information of the tip.
+        """
         def __init__(self, wavecar_object: vaspwfc, structure: Initio.Structure, energy_range_eV: list | np.ndarray = [], gamma_meV: float = 50, n_gammas: int = 5, tip_width_pm: float = 0., tip_p_fraction: float = 0., tip_height_pm = 200.):
             initio_instance = Initio()
             self.wfc = wavecar_object
@@ -1598,3 +1715,5 @@ class Initio:
         def rotate(self, vector: list = [0, 0, 1], theta_deg: float = 0.) -> None:
             self.rotate_sites(range(len(self.sites)), theta = np.deg2rad(theta_deg), axis = vector)
             return
+
+
