@@ -1,10 +1,23 @@
 import os, time, logging, threading
 import nglview as nv
 from PIL import Image
+from .VaspBandUnfolding import vaspwfc
+from pymatgen.io import vasp
+from .structures import Structure
+#from .unfold import UnfoldProcar
 
 
 
 def find_folder(target: str = "", base_folder = "C:\\DFT") -> str:
+    """Perform a nested search for a given folder under a base folder.
+
+    Args:
+        target (str, optional): Folder name. Defaults to "".
+        base_folder (str, optional): Base folder path. Defaults to "C:\\DFT".
+
+    Returns:
+        str: path
+    """
     target_folder = None
     sub_folders = [os.path.join(base_folder, folder) for folder in os.listdir(base_folder) if os.path.isdir(os.path.join(base_folder, folder))]
     for sub_folder in sub_folders:
@@ -60,3 +73,90 @@ def save_image(view: nv.NGLWidget, file_path: str = "") -> None:
     monitor_thread.daemon = True
     monitor_thread.start()
     return
+
+
+
+# VASP
+def read_vasp_file(path: str) -> object:
+    base_name = os.path.basename(path)
+    
+    match base_name:
+        case "WAVECAR": return get_wavecar(path)
+        case "POSCAR" | "CONTCAR": return get_structure(path)
+        case "PROCAR": return get_procar(path)
+        case "INCAR": return get_incar(path)
+        case "POTCAR": return get_potcar(path)
+        case "KPOINTS": return get_kpoints(path)
+        case "EIGENVAL": return get_eigenval(path)
+        case "OUTCAR": return get_outcar(path)
+        case _: raise Exception(f"Could not determine file type of provided file {path}")
+
+def get_wavecar(path: str) -> vaspwfc:
+    try:
+        wfc = vaspwfc(path, lgamma = False)
+        
+        n_kpts = int(wfc._nkpts)
+        if n_kpts < 2: wfc = vaspwfc(path, lgamma = True)
+        
+        return wfc
+    except Exception as e:
+        print("Error loading the wavecar")
+        return vaspwfc()
+
+def get_structure(path: str) -> Structure:
+    try:
+        structure = Structure.from_file(path)
+        return structure
+    except Exception as e:
+        raise Exception(f"Could not open POSCAR / CONTCAR file: {e}")
+
+def get_incar(path: str) -> vasp.inputs.Incar:
+    try:
+        incar = vasp.Incar.from_file(path)
+        return incar
+    except Exception as e:
+        raise Exception(f"Could not opten INCAR file: {e}")
+
+def get_potcar(path: str) -> vasp.inputs.Potcar:
+    try:
+        potcar = vasp.Potcar.from_file(path)
+        return potcar
+    except Exception as e:
+        raise Exception(f"Could not open POTCAR file: {e}")
+
+#def get_procar(path: str) -> UnfoldProcar:
+#    try:
+#        procar = UnfoldProcar(path)
+#        return procar
+#    except Exception as e:
+#        raise Exception(f"Could not open PROCAR file: {e}")
+
+def get_kpoints(path: str) -> vasp.inputs.Kpoints:
+    try:
+        kpoints = vasp.Kpoints.from_file(path)
+        return kpoints
+    except Exception as e:
+        raise Exception(f"Could not open KPOINTS file: {e}")
+
+def get_eigenval(path: str) -> vasp.outputs.Eigenval:
+    try:
+        eigenval = vasp.outputs.Eigenval(path)
+        return eigenval
+    except Exception as e:
+        raise Exception(f"Could not open EIGENVAL file: {e}")
+
+def get_outcar(path: str) -> vasp.outputs.Outcar:
+    try:
+        outcar = vasp.outputs.Outcar(path)
+        return outcar
+    except Exception as e:
+        raise Exception(f"Could not open OUTCAR file: {e}")
+
+def show_incar(incar: vasp.inputs.Incar) -> None:
+    try:
+        print(incar.get_str(pretty = True))
+        return
+    except Exception as e:
+        raise Exception(f"Could not show Incar contents: {e}")
+
+

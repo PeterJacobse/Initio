@@ -1,7 +1,7 @@
 import os
 import numpy as np
-from .initio import Initio
-from . import vaspwfc
+from . import vaspwfc, Structure
+from .bands import get_eigenenergies_from_wavecar
 from scipy.ndimage import gaussian_filter, sobel
 import matplotlib.pyplot as plt
 
@@ -12,8 +12,7 @@ class LDOSGenerator:
     Generates an object that holds information on the single-particle wavefunctions.
     This information is used to calculate simulated local density of states or scanning tunneling microscopy maps, given information of the tip.
     """
-    def __init__(self, wavecar_object: vaspwfc, structure: Initio.Structure, energy_range_eV: list | np.ndarray = [], gamma_meV: float = 50, n_gammas: int = 5, tip_width_pm: float = 0., tip_p_fraction: float = 0., tip_height_pm = 200.):
-        initio_instance = Initio()
+    def __init__(self, wavecar_object: vaspwfc, structure: Structure, energy_range_eV: list | np.ndarray = [], gamma_meV: float = 50, n_gammas: int = 5, tip_width_pm: float = 0., tip_p_fraction: float = 0., tip_height_pm: float = 200.):
         self.wfc = wavecar_object
         self.struc = structure
         self.set_tip_shape(tip_width_pm, tip_p_fraction)
@@ -36,12 +35,11 @@ class LDOSGenerator:
 
 
         # Get the band energies and take a selection ranging from n_gammas times the Lorentzian width below the minimum energy value to n_gammas times above the maximum energy value
-        energy_dict = initio_instance.get_eigenenergies_from_wavecar(wavecar_object)
+        energy_dict = get_eigenenergies_from_wavecar(wavecar_object)
         spin_up_energies = energy_dict["energies"]["spin up"]
         spin_down_energies = energy_dict["energies"]["spin down"]
         k_resolved_spin_up_energies = spin_up_energies.reshape(self.n_kpts, -1)
         k_resolved_spin_down_energies = spin_down_energies.reshape(self.n_kpts, -1)        
-        
         
         min_up_index = min([int(np.where(k_resolved_spin_up_energies[kpt] > min(energy_range_eV) - energy_padding_eV)[0][0]) for kpt in range(len(k_resolved_spin_up_energies))])
         min_down_index = min([int(np.where(k_resolved_spin_down_energies[kpt] > min(energy_range_eV) - energy_padding_eV)[0][0]) for kpt in range(len(k_resolved_spin_down_energies))])

@@ -1,9 +1,52 @@
 import numpy as np
 from math import factorial, comb
+from sympy import Expr, Symbol
 
 
 
-def Taylor_to_Fourier_matrix(self, N_harmonics: int = 3) -> np.ndarray:
+def lorentzian(x: float | Symbol | np.ndarray, x0: float, gamma: float) -> float | Expr | np.ndarray:
+    """A normalized Lorentzian function centered around x0 with HWHM gamma.
+
+    Args:
+        x (float | sympy.Symbol): Passing a float will evaluate the Lorentzian at that point to return a float. Passing a np.ndarray yields a np.ndarray. Passing a sympy.Symbol will generate a sympy.Expr object.
+        x0 (float): Center.
+        gamma (float): HWHM.
+
+    Returns:
+        float | Expr
+    """
+    gamma2 = gamma ** 2
+    return (1.0 / (np.pi * gamma)) * (gamma2 / ((x - x0) ** 2 + gamma2))
+
+def lorentz_taylor_coeffs(V_center: float, gamma: float, V0: float, N: int) -> np.ndarray:
+    """Obtain the Taylor coefficients for a normalized Lorentzian function of width gamma, centered at V_center, for a Taylor expansion around V0
+
+    Args:
+        V_center (float): Center of the Lorentzian function
+        gamma (float): Width of the Lorentian function
+        V0 (float): Taylor expansion center
+        N (int): Number of coefficients
+
+    Returns:
+        np.ndarray: Vector of Taylor coefficients
+    """
+    d = (V0 - V_center) - 1j * gamma
+    n = np.arange(N)
+    return np.imag((-1.0) ** n / d ** (n + 1)) / np.pi
+
+def diagonalQ(matrix: np.ndarray) -> bool:
+    """
+    Returns False if matrix has off-diagonal entries, and True otherwise.
+
+    Args:
+        matrix (np.ndarray): input matrix
+
+    Returns:
+        bool
+    """
+    return not bool(np.any(matrix - np.diag(np.diag(matrix))))
+
+def Taylor_to_Fourier_matrix(N_harmonics: int = 3) -> np.ndarray:
     """
     Constructs the (N+1) x (N+1) matrix A for harmonics n, m in [0, N].
     
@@ -23,7 +66,7 @@ def Taylor_to_Fourier_matrix(self, N_harmonics: int = 3) -> np.ndarray:
             A[n, m] = (numerator / (2 ** m)) * comb(m, delta)
     return A
 
-def Fourier_to_Taylor_matrix_2(self, N_harmonics: int = 3) -> np.ndarray:
+def Fourier_to_Taylor_matrix_2(N_harmonics: int = 3) -> np.ndarray:
     """
     Generates an (N+1) x (N+1) matrix that transforms coefficients 
     from the power basis (x^k) to the Chebyshev basis T_n(x).
@@ -39,7 +82,7 @@ def Fourier_to_Taylor_matrix_2(self, N_harmonics: int = 3) -> np.ndarray:
         A[:len(c), k] = c
     return A
 
-def Fourier_to_Taylor_matrix(self, N_harmonics: int = 3) -> np.ndarray:
+def Fourier_to_Taylor_matrix(N_harmonics: int = 3) -> np.ndarray:
     """
     Generates an (N + 1) x (N + 1) forward Chebyshev coefficient matrix.
     Maps a Chebyshev/Fourier amplitude vector to a power-basis coefficient vector.
@@ -54,7 +97,7 @@ def Fourier_to_Taylor_matrix(self, N_harmonics: int = 3) -> np.ndarray:
         A[:len(coeffs), j] = coeffs
     return A
 
-def numpy_to_latex(self, array: np.ndarray, matrix_type = "bmatrix", precision = 4):
+def numpy_to_latex(array: np.ndarray, matrix_type = "bmatrix", precision = 4):
     """
     Converts a 2D numpy array into a LaTeX matrix string.
     
