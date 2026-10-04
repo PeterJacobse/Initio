@@ -48,6 +48,57 @@ def DOS_from_energies(eigenenergies: list | np.ndarray = [], gamma = None, sigma
                     DOS[1, index] += gamma / (gamma2 + delta_E2)
     return DOS
 
+def DOS_from_Lorentzians(energy: float | list | np.ndarray, centers: list | np.ndarray = [], gammas: list | np.ndarray = [], weights: list | np.ndarray | None = None):
+    """Expands the (Local) Density Of States from a sum of Lorentzians.
+
+    Args:
+        energy (float | list | np.ndarray): Energy where to evaluate the LDOS. Providing a np.linspace gives a DOS evaluated over that domain.
+        centers (list | np.ndarray, optional): Energy values of the eigenstates. Defaults to [].
+        gammas (list | np.ndarray, optional): HWHM values of the peaks. Defaults to [].
+        weights (list | np.ndarray, optional): Weights of the peaks. Defaults to [].
+
+    Returns:
+        _type_: _description_
+    """
+    en = np.asarray(energy)
+    rho = np.zeros_like(en, dtype = np.float64)
+    if not isinstance(weights, np.ndarray | list): weights = np.ones_like(centers)
+    
+    for center, gamma, weight in zip(centers, gammas, weights):
+        rho += weight * gamma / ((en - center) ** 2 + gamma ** 2)
+    return rho / np.pi
+
+def Fourier_spectrum_from_Lorentzians(V_dc: float, V_ac, V_centers, gammas, weights, N_harmonic):
+    """
+    Computes numerically stable physical Fourier amplitudes C_n = I(t) harmonic components
+    at a fixed V_dc. Guaranteed not to blow up for high harmonics n.
+    """
+    V_centers = np.asarray(V_centers)
+    gammas = np.asarray(gammas)
+    weights = np.asarray(weights)
+    
+    delta_V = (V_centers - 1j * gammas) - V_dc
+    rad = np.sqrt(delta_V ** 2 - V_ac ** 2)
+    u = (delta_V - rad) / V_ac
+    
+    # CRITICAL FIX: Ensure |u| < 1 for every pole. If NumPy's branch cut chose the root with |u| > 1, take its reciprocal 1/u.
+    u = np.where(np.abs(u) > 1.0, 1.0 / u, u)
+    
+    harmonics = np.zeros(N_harmonic + 1, dtype = np.float64)
+    u_pow = np.ones_like(delta_V, dtype = np.complex128)
+    
+    # Compute physical Fourier amplitudes I_n
+    for n in range(N_harmonic + 1):
+        factor = 1.0 if n == 0 else 2.0
+        
+        pole_terms = u_pow / rad
+        I_n = (factor / np.pi) * np.sum(weights * np.imag(pole_terms))
+        harmonics[n] = I_n
+        
+        # Advance power: u^n -> u^(n+1) (exponentially decays since |u| < 1)
+        u_pow *= u
+    return harmonics
+
 def get_HOMO_LUMO(wavecar_object: vaspwfc) -> dict[str, float]:
     eigenstate_dict = get_eigenenergies_from_wavecar(wavecar_object)
     
@@ -177,4 +228,74 @@ def clean_kpath(kpath: list | np.ndarray, crystal_type: Literal["hexagonal", "or
                 print(f"Ignoring unrecognized kpoint in kpath: {kpoint}")
     
     return np.array(cleaned_kpath, dtype = float)
+
+
+
+class Eigenstate:
+    """Eigenstate object, comprising both the single-particle wavefunction and the single-particle energy (eigenenergy).
+    Unlike the pyvaspwfc convention of 1-indexing (e.g. ispin = 1 or 2), Eigenstate uses 0-based indexing like Python.
+    """
+    def __init__(self, energy: float, spin: int | str | bool = 0, kpoint: int = 0, band: int = 0, psi: np.ndarray = np.zeros((3, 3, 3))):
+        self.clean_spin(spin) # Creates attributes self.spin and self.spin_name
+        self.energy = energy
+        self.eigenenergy = energy # Alias
+        self.kpoint = kpoint
+        self.band = band
+        self.psi = psi
+   
+    def __repr__(self) -> str:
+        result = f"Eigenstate object\n  Energy:\t{self.eigenenergy = } eV\n  Spin:\t\t{self.spin = }\n\t\t{self.spin_name = }\n  Kpoint:\t{self.kpoint = }\n  Band index:\t{self.band = }\n  Wavefunction:\tself.psi = <np.{self.psi.__class__.__name__} (shape = {self.psi.shape})>"
+        return result
+    
+    def clean_spin(self, spin) -> None:
+        match spin:
+            case int() | bool() | float():
+                if not int(spin) in {0, 1}:
+                    raise Exception(f"Invalid spin index {spin}. Only 0 and 1 are recognized.")
+                else:
+                    self.spin = int(spin)
+                    self.spin_name = "up" if int(spin) == 0 else "down"
+            case str():
+                if not spin.lower() in {"up", "down"}:
+                    raise Exception(f"Invalid spin name {spin}. Only \"up\" and \"down\" are recognized.")
+                else:
+                    self.spin_name = spin.lower()
+                    self.spin = 0 if spin.lower() == "up" else 1
+            case _:
+                raise TypeError(f"Invalid type {type(spin)} for spin provided")
+        return
+    
+    @classmethod
+    def from_wavecar(cls, wavecar_object: vaspwfc, spin: int = 0, kpoint: int = 0, band: int = 0, target_energy: float | None = None):
+        wfc = wavecar_object
+        n_kpoints = int(wfc._nkpts)
+        n_spins = int(wfc._nspin)
+        n_bands = int(wfc._nbands)
+        
+        if not isinstance(spin, int) or not spin in {0, 1}: raise Exception(f"Invalid spin index {spin}. Only 0 and 1 are recognized.")
+        if spin == 1 and n_spins < 2: raise Exception(f"Invalid spin index {spin} for a wavecar object that has no spin polarization ({n_spins = }).")
+        if not isinstance(kpoint, int) or kpoint > n_kpoints - 1: raise Exception(f"Invalid k-point index {kpoint} for a wavecar object containing {n_kpoints} k-points.")
+        if not isinstance(target_energy, float):
+            if not isinstance(band, int) or band > n_bands - 1: raise Exception(f"Invalid band index {band} for a wavecar object containing {n_bands} bands.")
+        
+        try:
+            all_energies = wfc._bands
+            assert isinstance(all_energies, np.ndarray)
+            energies_at_spin_and_kpoint = all_energies[spin, kpoint]
+            
+            if isinstance(target_energy, float): # If a target energy is provided, find the eigenstate closest to that energy                
+                energy_differences = np.abs(all_energies - target_energy)
+                band = int(np.argmin(energy_differences))
+            
+            eigenenergy = float(energies_at_spin_and_kpoint[band])
+        except Exception as e:
+            raise Exception(f"Unable to extract the eigenenergy from the wavecar object: {e}")
+        
+        try:
+            psi = wfc.wfc_r(ispin = spin + 1, ikpt = kpoint + 1, iband = band + 1)
+            assert isinstance(psi, np.ndarray)
+        except Exception as e:
+            raise Exception(f"Unable to obtain the wavefunction from the wavecar object: {e}")
+            
+        return cls(eigenenergy, spin, kpoint, band, psi)
 

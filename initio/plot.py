@@ -11,6 +11,7 @@ from ase.data.colors import jmol_colors
 from scipy.ndimage import zoom
 from skimage.measure import marching_cubes
 from .bands import spin_and_occupation_resolved_DOS
+from .math import complex_to_rgba
 from typing import Literal
 
 
@@ -27,6 +28,18 @@ cm.add_scheme_func('custom_carbon', '''
 ''')
 
 
+
+def complex_array(array: np.ndarray, phase_shift: float = 0.) -> None:
+    """Convenience function for plotting a complex array
+
+    Args:
+        array (np.ndarray): Numpy array
+        phase_shift (float, optional): Phase shift. Defaults to 0..
+    """
+    rgba_array = complex_to_rgba(array, phase_shift = phase_shift)
+    plt.imshow(rgba_array)
+    plt.show()
+    return
 
 def DOS(wavecar_object: vaspwfc, *args, **kwargs) -> plt.Figure:
     colors = kwargs.pop("colors", None)

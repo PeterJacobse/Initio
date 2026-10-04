@@ -1,6 +1,7 @@
 import numpy as np
 from math import factorial, comb
 from sympy import Expr, Symbol
+import matplotlib.colors as mcolors
 
 
 
@@ -123,4 +124,23 @@ def numpy_to_latex(array: np.ndarray, matrix_type = "bmatrix", precision = 4):
         
     lines.append(f"\\end{{{matrix_type}}}")
     return "\n".join(lines)
+
+def complex_to_rgba(input_array: np.ndarray = np.zeros((2, 2)), phase_shift: float = 0., alpha: float = 1.) -> np.ndarray:
+    phase = np.angle(input_array) + phase_shift
+    hue = (phase + np.pi) / (2 * np.pi) % 1
+    mag = np.abs(input_array)
+    
+    flat_order = np.argsort(mag, axis = None)
+    rows, cols = np.unravel_index(flat_order, mag.shape)
+    sorted = np.array(list(zip(rows, cols)))
+    maximum = np.sum([mag[sorted[-idx, 0], sorted[-idx, 1]] for idx in range(1, 120)]) / 120
+    for idx in range(1, 120): mag[sorted[-idx, 0], sorted[-idx, 1]] = maximum
+    
+    value = mag / maximum # np.max(mag)
+    saturation = np.ones_like(hue)
+    hsv = np.stack((hue, saturation, value), axis = -1)
+    rgb = np.clip(mcolors.hsv_to_rgb(hsv), 0, 1)
+    rgba = np.concatenate((rgb, np.full_like(rgb, alpha)), axis = 2)[:, :, :4]
+    return rgba
+
 
