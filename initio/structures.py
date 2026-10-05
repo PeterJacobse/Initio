@@ -1,7 +1,7 @@
 import numpy as np
 from pymatgen.core import structure as pmg_struct
 from pymatgen.core import periodic_table
-from typing import Literal
+from typing import Literal, Self
 
 
 
@@ -75,7 +75,14 @@ class Structure(pmg_struct.Structure):
         super().__init__(lattice = lattice, species = species, coords = coords, **kwargs)
 
     @classmethod
-    def GNR(cls, N: int = 2, orientation: Literal["armchair", "zigzag"] = "zigzag", n_supercell: int = 1, unit_cell_height_A: float | int = 10) -> Structure:
+    def from_file(cls, filename: str, primitive: bool = False, sort: bool = False, merge_tol: float = 0, **kwargs) -> Self:
+        parent_instance = super().from_file(filename, primitive, sort, merge_tol, **kwargs)
+        child_instance = cls.__new__(cls)
+        [setattr(child_instance, key, value) for key, value in vars(parent_instance).items()]
+        return child_instance
+
+    @classmethod
+    def GNR(cls, N: int = 2, orientation: Literal["a", "armchair", "z", "zigzag"] = "zigzag", n_supercell: int = 1, unit_cell_height_A: float | int = 10) -> Self:
         """Convenienve class method to construct a graphene nanoribbon.
 
         Args:
@@ -92,9 +99,7 @@ class Structure(pmg_struct.Structure):
             case "armchair": orientation = "a"
             case "z": orientation = "z"
             case "zigzag": orientation = "z"
-            case _:
-                print("Invalid orientaion")
-                return cls(lattice = np.eye(3), species = [], coords = [])
+            case _: raise Exception(f"Unrecognized orientation {orientation} for GNR")
         
         latvec_z = unit_cell_height_A
         xlist = np.zeros((N * 2), dtype = np.float32)

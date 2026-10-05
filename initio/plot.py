@@ -13,6 +13,7 @@ from skimage.measure import marching_cubes
 from .bands import spin_and_occupation_resolved_DOS
 from .math import complex_to_rgba
 from typing import Literal
+import plotly.graph_objects as go
 
 
 
@@ -29,7 +30,7 @@ cm.add_scheme_func('custom_carbon', '''
 
 
 
-def complex_array(array: np.ndarray, phase_shift: float = 0.) -> None:
+def complex_array(array: np.ndarray, phase_shift: float = 0.) -> plt.Figure:
     """Convenience function for plotting a complex array
 
     Args:
@@ -37,9 +38,9 @@ def complex_array(array: np.ndarray, phase_shift: float = 0.) -> None:
         phase_shift (float, optional): Phase shift. Defaults to 0..
     """
     rgba_array = complex_to_rgba(array, phase_shift = phase_shift)
-    plt.imshow(rgba_array)
-    plt.show()
-    return
+    fig, ax = plt.subplots()
+    ax.imshow(rgba_array)
+    return fig
 
 def DOS(wavecar_object: vaspwfc, *args, **kwargs) -> plt.Figure:
     colors = kwargs.pop("colors", None)
@@ -72,6 +73,164 @@ def DOS(wavecar_object: vaspwfc, *args, **kwargs) -> plt.Figure:
     ax.yaxis.set_minor_locator(ticker.MultipleLocator(.1))
     
     ax.grid(True, which = "both", axis = "y", color = "gray", linewidth = 0.5, alpha = 0.5)
+    return fig
+
+def levels(wavecar_object: vaspwfc | None = None, energies: list | np.ndarray = [], occupations: list | np.ndarray = [], spins: list | np.ndarray = [], band_indices: list | np.ndarray = [], kpoints: list | np.ndarray = [],
+           en_diff_min = 0.01, spin_up_color: str = "#3080ff", spin_down_color: str = "#d00050", figsize: tuple = (750, 600), energy_range: list | tuple | np.ndarray | None = None, channel_gap: float = 1.5) -> go.Figure:
+
+    if isinstance(wavecar_object, vaspwfc):
+        n_spins = wavecar_object._nspin
+        n_kpoints = wavecar_object._nkpts
+
+        all_energies_all_k = wavecar_object._bands
+        all_energies = all_energies_all_k[:, 0]
+        all_band_indices = np.broadcast_to(np.arange(all_energies.shape[-1]), all_energies.shape)
+        all_occupations_all_k = wavecar_object._occs
+        all_occupations = all_occupations_all_k[:, 0]
+        all_spins = np.zeros_like(all_energies, dtype = np.int8)
+
+        if n_spins > 1:
+            all_spins[1] += 1
+        #if n_kpoints > 1:
+        #    kvectors = np.round(wfc._kvecs, 3)
+        #    all_kvectors = np.broadcast_to(np.arange(all_energies.shape[-1]), all_energies.shape)
+
+        if energy_range is not None and len(energy_range) == 2: en_min, en_max = float(energy_range[0]), float(energy_range[1])
+        else: en_min, en_max = min(all_energies), max(all_energies)
+        
+        band_crosses_min = np.any(all_energies_all_k > en_min, axis = (0, 1))
+        band_min = int(np.where(band_crosses_min)[0][0])
+        band_crosses_max = np.any(all_energies_all_k < en_max, axis = (0, 1))
+        band_max = int(np.where(band_crosses_max)[0][-1]) + 2
+
+        #cropped_kpoints = all_kpoints[:, :, band_min:band_max]
+        cropped_energies = all_energies[:, band_min:band_max]
+        cropped_occupations = all_occupations[:, band_min:band_max]
+        cropped_spins = all_spins[:, band_min:band_max]
+        cropped_band_indices = all_band_indices[:, band_min:band_max]
+
+        #kpoints_flat = cropped_kpoints.reshape(-1)
+        energies = cropped_energies.reshape(-1)
+        occupations = cropped_occupations.reshape(-1)
+        spins = cropped_spins.reshape(-1)
+        band_indices = cropped_band_indices.reshape(-1)
+    
+    energies = np.asarray(energies, dtype = np.float32)
+    has_spin = True if (isinstance(spins, np.ndarray | list) and len(spins) == len(energies)) else False
+    has_indices = True if (isinstance(band_indices, list | np.ndarray) and len(band_indices) == len(energies)) else False
+    has_occupations = True if (isinstance(occupations, list | np.ndarray) and len(occupations) == len(energies)) else False
+    has_kpoints = True if (isinstance(kpoints, list | np.ndarray) and len(kpoints) == len(energies)) else False
+    
+    # Cropping to energy range
+    if energy_range is not None and len(energy_range) == 2: en_min, en_max = float(energy_range[0]), float(energy_range[1])
+    else: en_min, en_max = min(all_energies), max(all_energies)
+    
+    band_min = np.where(energies > en_min)[0]
+    band_min = band_min[0] if len(band_min) > 0 else 0
+    band_max = np.where(energies < en_max)[0]
+    band_max = band_max[-1] + 2 if len(band_max) > 0 else len(energies)
+
+    energies = energies[band_min:band_max]
+    if has_spin: spins = spins[band_min:band_max]
+    if has_occupations: occupations = occupations[band_min:band_max]
+    if has_kpoints: kpoints = kpoints[band_min:band_max]
+    if has_indices: band_indices = band_indices[band_min:band_max]
+    else: band_indices = np.arange(len(energies))
+
+
+    
+    # Level clustering and horizontal partitioning
+    def get_centered_sub_slots(indices_in_channel: list[int] | np.ndarray) -> dict[int, float]:
+        if len(indices_in_channel) == 0: return {}
+        
+        channel_energies = energies[indices_in_channel]
+        sorted_sub_idx = np.argsort(channel_energies)
+        
+        # 1. Group levels into clusters that overlap vertically
+        clusters = []
+        current_cluster = []
+        last_energy = -float("inf")
+        
+        for sub_idx in sorted_sub_idx:
+            en = channel_energies[sub_idx]
+            if en < en_min or en > en_max: continue
+            global_idx = indices_in_channel[sub_idx]
+
+            if en - last_energy >= en_diff_min:
+                if current_cluster:
+                    clusters.append(current_cluster)
+                current_cluster = [global_idx]
+            else:
+                current_cluster.append(global_idx)
+            last_energy = en
+        if current_cluster: clusters.append(current_cluster)
+
+        slots_mapped = {}
+        for cluster in clusters:
+            length = len(cluster)
+            positions = np.arange(length) - .5 * (length - 1)
+            for global_idx, pos in zip(cluster, positions): slots_mapped.update({int(global_idx): float(pos)})
+        return slots_mapped
+    
+    sub_slot_spacing = 0.5
+    level_width = 0.4
+    fig = go.Figure()
+
+
+
+    if has_spin:        
+        down_indices = [i for i, s in enumerate(spins) if s == 0]
+        down_slots = get_centered_sub_slots(down_indices)    
+        up_indices = [i for i, s in enumerate(spins) if s == 1]
+        up_slots = get_centered_sub_slots(up_indices)
+        max_sub_offset = max([abs(value) for value in list(down_slots.values()) + list(up_slots.values())]) * sub_slot_spacing
+    else:
+        up_indices = np.arange(len(energies))
+        up_slots = get_centered_sub_slots(up_indices)
+        max_sub_offset = max([abs(value) for value in up_slots.values()]) * sub_slot_spacing
+
+    for index, energy in enumerate(energies):
+        if energy < en_min or energy > en_max: continue
+        
+        band_index = band_indices[index]
+        tooltip = f"<b>Band / Level index:</b> {band_index}<br><b>energy:</b> {energy:.3f} eV"
+        
+        if has_spin:
+            match spins[index]:
+                case 1:
+                    channel_center = .5 * channel_gap
+                    x_center = channel_center + up_slots[index] * sub_slot_spacing
+                    color = spin_up_color
+                    spin_label = "↑"
+                case _:
+                    channel_center = -.5 * channel_gap
+                    x_center = channel_center - (down_slots[index] * sub_slot_spacing)
+                    color = spin_down_color
+                    spin_label = "↓"
+            tooltip += f"<br><b>spin:</b> {spin_label}"
+        else:
+            spin_label = "↑↓"
+            x_center = up_slots[index] * sub_slot_spacing
+            color = spin_down_color
+        
+        if has_occupations:
+            occ = occupations[index]
+            tooltip += f"<br><b>occupation:</b> {occ:.2f}<br><extra></extra>"
+            if occ > 0: fig.add_annotation(x = x_center, y = energy, text = spin_label, showarrow = False, font = {"size": int(32 * occ), "color": "#ffffff"}, yshift = 0)
+        
+        if has_kpoints:
+            kpoint_index = kpoints[index]
+            tooltip += f"<br><b>k-point:</b> {kpoint_index:.2f}<br><extra></extra>"
+
+        fig.add_trace(go.Scatter(x = [x_center - .5 * level_width, x_center, x_center + .5 * level_width], y = [energy, energy, energy], mode = "lines", line = {"width": 4, "color": color}, hovertemplate = tooltip))
+
+    x_range_max = max_sub_offset + .6
+    if has_spin: x_range_max += .5 * channel_gap
+    
+    x_settings = {"tickvals": [-channel_gap / 2, channel_gap / 2], "ticktext": ["<b>spin down (↓)</b>", "<b>spin up (↑)</b>"], "zeroline": False, "range": [-x_range_max, x_range_max], "showgrid": False, "showticklabels": True}
+    y_settings = {"title": "Energy (eV)", "showgrid": True, "gridcolor": "rgba(220, 220, 220, 0.5)", "range": [en_min, en_max]}
+    if has_spin: x_settings.update({"zeroline": True, "zerolinecolor": "rgba(180, 180, 180, 0.4)", "zerolinewidth": 1.5, })
+    fig.update_layout(title = {"text": "energy level diagram", "x": 0.5}, showlegend = False, hovermode = "closest", width = figsize[0], height = figsize[1], template = "plotly_dark", xaxis = x_settings, yaxis = y_settings)
     return fig
 
 def structure(struct: Structure | Molecule, max_bond_length: float | None = None, width: int = 800, height: int = 600, atom_size: float = .3, bond_size: float = .22, camera_type: Literal["orthographic", "perspective"] = "orthographic", flip_over: bool = False, background_color: str = "#000000") -> nv.NGLWidget:
@@ -195,9 +354,12 @@ def structure(struct: Structure | Molecule, max_bond_length: float | None = None
     view.layout.height = f"{height}px"
     view.layout.width = f"{width}px"
     view.layout.background = background_color
+    view.layout.border = "none"
+    view.layout.margin = "0"
+    view.layout.padding = "0"
     return view
 
-def orbital(wavecar_object: vaspwfc, spin: int = 0, kpoint: int = 0, band: int = 0, isolevel: float = .1, opacity: float = 1., flip_x: bool = False, flip_y: bool = False, flip_z: bool = False, upsampling: int = 1,
+def orbital(wavecar_object: vaspwfc, spin: int | str = 0, kpoint: int = 0, band: int = 0, isolevel: float = .1, opacity: float = 1., flip_x: bool = False, flip_y: bool = False, flip_z: bool = False, upsampling: int = 1,
             struct: Structure | Molecule | None = None, max_bond_length: float = 2.6, atom_size: float = .3, bond_size: float = .22, struc_opacity: float = 1.,
             width: int = 800, height: int = 600, camera_type: Literal["orthographic", "perspective"] = "orthographic", flip_over: bool = False, background_color: str = "#000000") -> nv.NGLWidget:
     """
@@ -228,6 +390,10 @@ def orbital(wavecar_object: vaspwfc, spin: int = 0, kpoint: int = 0, band: int =
     Returns:
         nv.NGLWidget: NGLView view object
     """
+    if isinstance(spin, str):
+        if not spin.lower() in {"down", "up"}: raise Exception(f"Invalid spin {spin}. Recognized values are \"up\" and \"down\".")
+        else: spin = 0 if spin.lower() == "down" else 1
+
     ispin = spin + 1
     ikpt = kpoint + 1
     iband = band + 1
@@ -254,10 +420,11 @@ def orbital(wavecar_object: vaspwfc, spin: int = 0, kpoint: int = 0, band: int =
     
     if isinstance(struct, Structure):
         view = structure(struct, max_bond_length, width, height, atom_size, bond_size, camera_type, background_color = background_color)
-        view.update_representation(component = len(view._ngl_component_names) - 2, repr_index = 0, opacity = struc_opacity, transparent = True, depthWrite = False)
-        view.update_representation(component = len(view._ngl_component_names) - 1, repr_index = 0, opacity = struc_opacity, transparent = True, depthWrite = False)
+        view.update_representation(component = len(view._ngl_component_names) - 2, repr_index = 0, opacity = struc_opacity, transparent = True, depthWrite = True)
+        view.update_representation(component = len(view._ngl_component_names) - 1, repr_index = 0, opacity = struc_opacity, transparent = True, depthWrite = True)
     else:
         view = nv.NGLWidget()
+        view.stage.set_parameters(depth_of_field = 0, fog_near = 100, fog_far = 100, camera_type = camera_type, background_color = background_color)
     
     try:
         for orb, color in zip([orb_plus, orb_minus], [[.8, .4, 0], [0, .2, .9]]):
@@ -282,6 +449,9 @@ def orbital(wavecar_object: vaspwfc, spin: int = 0, kpoint: int = 0, band: int =
         if flip_over: view.control.spin([1, 0, 0], np.deg2rad(180))
         view.center()
         view.layout.background = background_color
+        view.layout.border = "none"
+        view.layout.margin = "0"
+        view.layout.padding = "0"
     except:
         print("Problem creating the mesh")
     return view

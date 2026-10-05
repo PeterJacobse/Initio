@@ -77,18 +77,70 @@ def save_image(view: nv.NGLWidget, file_path: str = "") -> None:
 
 
 # VASP
+def get_all_vasp_files(path: str) -> dict[str, object]:
+    if os.path.isfile(path): folder = os.path.dirname(path)
+    else: folder = path
+    if not os.path.isdir(folder): raise FileNotFoundError("Invalid path provided")
+    
+    output_dict: dict[str, object] = {}
+    files = [os.path.join(path, filename) for filename in os.listdir(folder)]
+
+    for file in files:
+        try:
+            match os.path.basename(file):
+                case "INCAR":
+                    incar = get_incar(file)
+                    output_dict.update({"INCAR": incar})
+                case "CONTCAR" | "POSCAR":
+                    struct = get_structure(file)
+                    output_dict.update({"POSCAR": struct})
+                case "WAVECAR":
+                    wavecar = get_wavecar(file)
+                    output_dict.update({"WAVECAR": wavecar})
+                case "POTCAR":
+                    potcar = get_potcar(file)
+                    output_dict.update({"POTCAR": potcar})
+                case "KPOINTS":
+                    kpoints = get_kpoints(file)
+                    output_dict.update({"KPOINTS": kpoints})
+                case "EIGENVAL":
+                    eigenval = get_eigenval(file)
+                    output_dict.update({"EIGENVAL": eigenval})
+                case "OUTCAR":
+                    outcar = get_outcar(path)
+                    output_dict.update({"OUTCAR": outcar})
+                case _:
+                    continue
+        except Exception as e:
+            print(f"{e}")
+    return output_dict
+
 def read_vasp_file(path: str) -> object:
     base_name = os.path.basename(path)
     
     match base_name:
-        case "WAVECAR": return get_wavecar(path)
-        case "POSCAR" | "CONTCAR": return get_structure(path)
-        case "PROCAR": return get_procar(path)
-        case "INCAR": return get_incar(path)
-        case "POTCAR": return get_potcar(path)
-        case "KPOINTS": return get_kpoints(path)
-        case "EIGENVAL": return get_eigenval(path)
-        case "OUTCAR": return get_outcar(path)
+        case "WAVECAR":
+            try: return get_wavecar(path)
+            except: pass
+        case "POSCAR" | "CONTCAR":
+            try: return get_structure(path)
+            except: pass
+        #case "PROCAR": return get_procar(path)
+        case "INCAR":
+            try: return get_incar(path)
+            except: pass
+        case "POTCAR":
+            try: return get_potcar(path)
+            except: pass
+        case "KPOINTS":
+            try: return get_kpoints(path)
+            except: pass
+        case "EIGENVAL":
+            try: return get_eigenval(path)
+            except: pass
+        case "OUTCAR":
+            try: return get_outcar(path)
+            except: pass
         case _: raise Exception(f"Could not determine file type of provided file {path}")
 
 def get_wavecar(path: str) -> vaspwfc:

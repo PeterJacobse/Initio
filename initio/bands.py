@@ -4,6 +4,7 @@ from .VaspBandUnfolding import vaspwfc
 from typing import Literal
 from .io import get_eigenval
 from pymatgen.io.vasp.outputs import Outcar
+from scipy.ndimage import sobel
 
 
 
@@ -236,6 +237,7 @@ class Eigenstate:
     Unlike the pyvaspwfc convention of 1-indexing (e.g. ispin = 1 or 2), Eigenstate uses 0-based indexing like Python.
     """
     def __init__(self, energy: float, spin: int | str | bool = 0, kpoint: int = 0, band: int = 0, psi: np.ndarray = np.zeros((3, 3, 3))):
+        if not psi.ndim == 3: raise Exception(f"Invalid dimensionality {psi.ndim} for eigenstate wavefunction")
         self.clean_spin(spin) # Creates attributes self.spin and self.spin_name
         self.energy = energy
         self.eigenenergy = energy # Alias
@@ -254,17 +256,27 @@ class Eigenstate:
                     raise Exception(f"Invalid spin index {spin}. Only 0 and 1 are recognized.")
                 else:
                     self.spin = int(spin)
-                    self.spin_name = "up" if int(spin) == 0 else "down"
+                    self.spin_name = "up" if int(spin) == 1 else "down"
             case str():
                 if not spin.lower() in {"up", "down"}:
                     raise Exception(f"Invalid spin name {spin}. Only \"up\" and \"down\" are recognized.")
                 else:
                     self.spin_name = spin.lower()
-                    self.spin = 0 if spin.lower() == "up" else 1
+                    self.spin = 1 if spin.lower() == "up" else 0
             case _:
                 raise TypeError(f"Invalid type {type(spin)} for spin provided")
         return
-    
+
+    def slice_wavefunction(self, index: int = 0, axis: Literal[0, 1, 2] = 0) -> None:
+        match axis:
+            case 0: wfn_2D = self.psi[index]
+            case 1: wfn_2D = self.psi[:, index]
+            case 2: wfn_2D = self.psi[:, :, index]
+        
+        self.psi2D_s = wfn_2D
+        self.psi2D_p = sobel(wfn_2D, axis = 1, mode = "wrap") + 1j * sobel(wfn_2D, axis = 0, mode = "wrap")
+        return
+
     @classmethod
     def from_wavecar(cls, wavecar_object: vaspwfc, spin: int = 0, kpoint: int = 0, band: int = 0, target_energy: float | None = None):
         wfc = wavecar_object

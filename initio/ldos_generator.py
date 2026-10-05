@@ -160,7 +160,7 @@ class LDOSGenerator:
         band_crosses_min = np.any(all_energies > en_min, axis = (0, 1))
         band_min = int(np.where(band_crosses_min)[0][0])
         band_crosses_max = np.any(all_energies < en_max, axis = (0, 1))
-        band_max = int(np.where(band_crosses_max)[0][-1])
+        band_max = int(np.where(band_crosses_max)[0][-1]) + 1
         
         # Scenario 1: Initial instantiation (extract the full range)
         if not isinstance(self.band_min, int):
@@ -210,14 +210,7 @@ class LDOSGenerator:
 
     def slice_eigenstate(self, eigenstate: Eigenstate, tip_height_pm: float | None = None) -> None:
         slice_index = self.get_slice_index(tip_height_pm)
-        psi3D = eigenstate.psi
-        psi2D_s = psi3D[:, :, slice_index] # Generate the 2D wavefunction by slicing at the appropriate height
-        psi2D_p = sobel(psi2D_s, axis = 1, mode = "wrap") + 1j * sobel(psi2D_s, axis = 0, mode = "wrap")
-        
-        # Attach the sliced wavefunctions to the eigenstate object
-        assert isinstance(psi3D, np.ndarray) and isinstance(psi2D_s, np.ndarray) and isinstance(psi2D_p, np.ndarray)
-        eigenstate.psi2D_s = psi2D_s # type: ignore
-        eigenstate.psi2D_p = psi2D_p # type: ignore
+        eigenstate.slice_wavefunction(slice_index, axis = 2)
         return
 
     def slice_eigenstates(self, tip_height_pm: float | None = None) -> None:
@@ -228,8 +221,8 @@ class LDOSGenerator:
         if not hasattr(eigenstate, "psi2D_s"): self.slice_eigenstate(eigenstate)
         assert hasattr(eigenstate, "psi2D_s") and hasattr(eigenstate, "psi2D_p")
         
-        psi2D_s = eigenstate.psi2D_s # type: ignore
-        psi2D_p = eigenstate.psi2D_p # type: ignore
+        psi2D_s = eigenstate.psi2D_s
+        psi2D_p = eigenstate.psi2D_p
 
         if not isinstance(tip_width_pm, float): tip_width_pm = self.tip_width_pm
         tip_width_px = tip_width_pm * self.voxels_per_pm
@@ -250,10 +243,7 @@ class LDOSGenerator:
 
     # Maps
     def get_eigenenergies(self) -> np.ndarray:
-        energy_list = []
-        for eigenstate in self.eigenstates:
-            energy_list.append(eigenstate.energy)
-        return np.ndarray(energy_list)
+        return np.array([eigenstate.energy for eigenstate in self.eigenstates])
 
     def get_energy_weights(self, energy: float | int = 0) -> np.ndarray:
         weights = []
@@ -348,7 +338,7 @@ class LDOSGenerator:
 
 
     # Spectra
-    def get_spaial_weights(self, x_nm: float = 0., y_nm: float = 0.) -> np.ndarray:
+    def get_spatial_weights(self, x_nm: float = 0., y_nm: float = 0.) -> np.ndarray:
         return np.zeros((3, 3))
 
     def get_spectrum(self, x_nm: float = 0., y_nm: float = 0.) -> np.ndarray:
