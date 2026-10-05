@@ -197,9 +197,9 @@ def structure(struct: Structure | Molecule, max_bond_length: float | None = None
     view.layout.background = background_color
     return view
 
-def orbital(wavecar_object: vaspwfc, ispin: int = 1, ikpt: int = 1, iband: int = 1, isolevel: float = .1, opacity: float = 1., flip_x: bool = False, flip_y: bool = False, flip_z: bool = False, upsampling: int = 1,
+def orbital(wavecar_object: vaspwfc, spin: int = 0, kpoint: int = 0, band: int = 0, isolevel: float = .1, opacity: float = 1., flip_x: bool = False, flip_y: bool = False, flip_z: bool = False, upsampling: int = 1,
             struct: Structure | Molecule | None = None, max_bond_length: float = 2.6, atom_size: float = .3, bond_size: float = .22, struc_opacity: float = 1.,
-            width: int = 800, height: int = 600, camera_type: str = "orthographic", flip_over: bool = False, background_color: str = "#000000") -> nv.NGLWidget:
+            width: int = 800, height: int = 600, camera_type: Literal["orthographic", "perspective"] = "orthographic", flip_over: bool = False, background_color: str = "#000000") -> nv.NGLWidget:
     """
     Generates a NGLView view object that contains the structure along with a 3D orbital contour plot of the single-particle state defined by the provided wavecar object, ispin, ikpt and iband.
 
@@ -228,6 +228,10 @@ def orbital(wavecar_object: vaspwfc, ispin: int = 1, ikpt: int = 1, iband: int =
     Returns:
         nv.NGLWidget: NGLView view object
     """
+    ispin = spin + 1
+    ikpt = kpoint + 1
+    iband = band + 1
+    
     if not isinstance(wavecar_object, vaspwfc): raise Exception(f"Invalid wave function")
     if not isinstance(opacity, float | int) or opacity < 0 or opacity > 1: opacity = 1.
     if not isinstance(struc_opacity, float | int) or struc_opacity < 0 or struc_opacity > 1: struc_opacity = 1.
