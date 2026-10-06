@@ -162,50 +162,39 @@ class LDOSGenerator:
         band_crosses_max = np.any(all_energies < en_max, axis = (0, 1))
         band_max = int(np.where(band_crosses_max)[0][-1]) + 1
         
-        # Scenario 1: Initial instantiation (extract the full range)
-        if not isinstance(self.band_min, int):
-            for band in tqdm(range(band_min, band_max), desc = "Extracting wavefunctions"):
+        states_by_key = {}
+        for eigenstate in self.eigenstates:
+            key = (eigenstate.band, eigenstate.spin, eigenstate.kpoint)
+            states_by_key.setdefault(key, eigenstate)
+
+        missing_bands = [
+            band for band in range(band_min, band_max)
+            if any((band, spin_index, kpoint) not in states_by_key
+                   for spin_index in range(self.n_spins)
+                   for kpoint in range(self.n_kpts))
+        ]
+        if missing_bands:
+            for band in tqdm(missing_bands, desc = "Extracting wavefunctions"):
                 for spin_index in range(self.n_spins):
                     for kpoint in range(self.n_kpts):
+                        key = (band, spin_index, kpoint)
+                        if key in states_by_key: continue
                         new_eigenstate = Eigenstate.from_wavecar(self.wfc, spin = spin_index, kpoint = kpoint, band = band)
                         self.tip_convolve_eigenstate(new_eigenstate)
-                        self.eigenstates.append(new_eigenstate)
-            
+                        states_by_key[key] = new_eigenstate
+
+        self.eigenstates = sorted(states_by_key.values(), key = lambda state: (state.band, state.spin, state.kpoint))
+
+        if not isinstance(self.band_min, int) or not isinstance(self.band_max, int):
             self.band_min = band_min
             self.band_max = band_max
             self.en_min = en_min
             self.en_max = en_max
-            
         else:
-            # Scenario 2: New band_min is smaller -> prepend new states
-            if band_min < self.band_min:
-                prepended_states = []
-                # Loop through the new lower bands (up to the old self.band_min)
-                for band in tqdm(range(band_min, self.band_min), desc = "Extracting wavefunctions and prepending them to self.eigenstates"):
-                    for spin_index in range(self.n_spins):
-                        for kpoint in range(self.n_kpts):
-                            new_eigenstate = Eigenstate.from_wavecar(self.wfc, spin = spin_index, kpoint = kpoint, band = band)
-                            self.tip_convolve_eigenstate(new_eigenstate)
-                            prepended_states.append(new_eigenstate)
-                
-                # Insert all new lower states at the beginning of the list
-                self.eigenstates = prepended_states + self.eigenstates
-                self.band_min = band_min
-                self.en_min = en_min
-
-            # Scenario 3: New band_max is larger -> APPEND new states
-            assert isinstance(self.band_max, int)
-            if band_max > self.band_max:
-                # Loop through the new upper bands (starting from the old self.band_max)
-                for band in tqdm(range(self.band_max, band_max), desc = "Extracting wavefunctions and appending them to self.eigenstates"):
-                    for spin_index in range(self.n_spins):
-                        for kpoint in range(self.n_kpts):
-                            new_eigenstate = Eigenstate.from_wavecar(self.wfc, spin = spin_index, kpoint = kpoint, band = band)
-                            self.tip_convolve_eigenstate(new_eigenstate)
-                            self.eigenstates.append(new_eigenstate)
-                
-                self.band_max = band_max
-                self.en_max = en_max
+            if band_min < self.band_min: self.en_min = en_min
+            if band_max > self.band_max: self.en_max = en_max
+            self.band_min = min(self.band_min, band_min)
+            self.band_max = max(self.band_max, band_max)
         return
 
     def slice_eigenstate(self, eigenstate: Eigenstate, tip_height_pm: float | None = None) -> None:
@@ -235,6 +224,7 @@ class LDOSGenerator:
         return
 
     def tip_convolve_eigenstates(self, tip_width_pm: float | None = None) -> None:
+        if len(self.eigenstates) < 1: return
         for eigenstate in tqdm(self.eigenstates, desc = "Recomputing the tunneling matrix elements"):
             self.tip_convolve_eigenstate(eigenstate, tip_width_pm)
         return
