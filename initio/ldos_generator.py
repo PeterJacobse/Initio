@@ -157,6 +157,7 @@ class LDOSGenerator:
     def set_tip_height(self, height_pm: float | int | None = None) -> None:
         if isinstance(height_pm, float | int) and not height_pm == self.tip_height_pm:
             self.tip_height_pm = height_pm
+            self.slice_eigenstates()
             self.tip_convolve_eigenstates()
         return
 
@@ -194,7 +195,7 @@ class LDOSGenerator:
         
         states_by_key = {}
         for eigenstate in self.eigenstates:
-            key = eigenstate.band, eigenstate.spin, eigenstate.kpoint
+            key = (eigenstate.band, eigenstate.spin, eigenstate.kpoint)
             states_by_key.setdefault(key, eigenstate)
 
         missing_bands = [
@@ -207,7 +208,7 @@ class LDOSGenerator:
             for band in tqdm(missing_bands, desc = "Extracting wavefunctions"):
                 for spin_index in range(self.n_spins):
                     for kpoint in range(self.n_kpts):
-                        key = band, spin_index, kpoint
+                        key = (band, spin_index, kpoint)
                         if key in states_by_key: continue
                         new_eigenstate = Eigenstate.from_wavecar(self.wfc, spin = spin_index, kpoint = kpoint, band = band)
                         self.tip_convolve_eigenstate(new_eigenstate)
