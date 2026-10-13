@@ -5,7 +5,7 @@ import matplotlib.colors as mcolors
 
 
 
-def lorentzian(x: float | Symbol | np.ndarray, x0: float, gamma: float) -> float | Expr | np.ndarray:
+def Lorentzian(x: float | Symbol | np.ndarray, x0: float, gamma: float) -> float | Expr | np.ndarray:
     """A normalized Lorentzian function centered around x0 with HWHM gamma.
 
     Args:
@@ -17,9 +17,9 @@ def lorentzian(x: float | Symbol | np.ndarray, x0: float, gamma: float) -> float
         float | Expr
     """
     gamma2 = gamma ** 2
-    return (1.0 / (np.pi * gamma)) * (gamma2 / ((x - x0) ** 2 + gamma2))
+    return (1.0 / (np.pi * gamma)) * (gamma2 / ((x - x0) ** 2 + gamma2)) # type: ignore
 
-def lorentz_taylor_coeffs(V_center: float, gamma: float, V0: float, N: int) -> np.ndarray:
+def Lorentz_taylor_coeffs(V_center: float, gamma: float, V0: float, N: int) -> np.ndarray:
     """Obtain the Taylor coefficients for a normalized Lorentzian function of width gamma, centered at V_center, for a Taylor expansion around V0
 
     Args:

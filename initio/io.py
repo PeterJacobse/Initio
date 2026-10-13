@@ -8,6 +8,28 @@ from .structures import Structure
 
 
 
+def get_file_path_from_dialog(extensions: list[str] | None = None) -> str:
+    """
+    Opens a Tkinter dialog to pick a file.
+    """
+    tk_filter = [("All Files", "*.*")]
+    if extensions: tk_filter = [(f"{ext.upper()} Files", f"*.{ext}") for ext in extensions]
+    
+    try:
+        import tkinter as tk
+        from tkinter import filedialog       
+        
+        root = tk.Tk()
+        root.attributes("-topmost", True)
+        root.withdraw()
+        file_path = filedialog.askopenfilename(parent = root, title = "Select a File to Open", filetypes = tk_filter)
+        root.destroy()
+    except Exception as e:
+        print(f"Could not open a graphical file dialog: {e}")
+        # Absolute fallback: console input
+        file_path = input("Please type or paste the absolute file path: ").strip('"\'')
+    return file_path
+
 def find_folder(target: str = "", base_folder = "C:\\DFT") -> str:
     """Perform a nested search for a given folder under a base folder.
 
@@ -143,8 +165,11 @@ def read_vasp_file(path: str) -> object:
             except: pass
         case _: raise Exception(f"Could not determine file type of provided file {path}")
 
-def get_wavecar(path: str) -> vaspwfc:
+def get_wavecar(path: str = "") -> vaspwfc:
     try:
+        if not path: path = get_file_path_from_dialog()
+        if os.path.isdir(path): path = os.path.join(path, "WAVECAR")
+        
         wfc = vaspwfc(path, lgamma = False)
         
         n_kpts = int(wfc._nkpts)
@@ -155,23 +180,32 @@ def get_wavecar(path: str) -> vaspwfc:
         print("Error loading the wavecar")
         return vaspwfc()
 
-def get_structure(path: str) -> Structure:
+def get_structure(path: str = "") -> Structure:
     try:
+        if not path: path = get_file_path_from_dialog()
+        if os.path.isdir(path): path = os.path.join(path, "CONTCAR")
+        
         structure = Structure.from_file(path)
         return structure
     except Exception as e:
         raise Exception(f"Could not open POSCAR / CONTCAR file: {e}")
 
-def get_incar(path: str) -> vasp.inputs.Incar:
+def get_incar(path: str = "") -> vasp.inputs.Incar:
     try:
-        incar = vasp.Incar.from_file(path)
+        if not path: path = get_file_path_from_dialog()
+        if os.path.isdir(path): path = os.path.join(path, "INCAR")
+        
+        incar = vasp.inputs.Incar.from_file(path)
         return incar
     except Exception as e:
         raise Exception(f"Could not opten INCAR file: {e}")
 
-def get_potcar(path: str) -> vasp.inputs.Potcar:
+def get_potcar(path: str = "") -> vasp.inputs.Potcar:
     try:
-        potcar = vasp.Potcar.from_file(path)
+        if not path: path = get_file_path_from_dialog()
+        if os.path.isdir(path): path = os.path.join(path, "POTCAR")
+        
+        potcar = vasp.inputs.Potcar.from_file(path)
         return potcar
     except Exception as e:
         raise Exception(f"Could not open POTCAR file: {e}")
@@ -183,22 +217,31 @@ def get_potcar(path: str) -> vasp.inputs.Potcar:
 #    except Exception as e:
 #        raise Exception(f"Could not open PROCAR file: {e}")
 
-def get_kpoints(path: str) -> vasp.inputs.Kpoints:
+def get_kpoints(path: str = "") -> vasp.inputs.Kpoints:
     try:
-        kpoints = vasp.Kpoints.from_file(path)
+        if not path: path = get_file_path_from_dialog()
+        if os.path.isdir(path): path = os.path.join(path, "KPOINTS")
+        
+        kpoints = vasp.inputs.Kpoints.from_file(path)
         return kpoints
     except Exception as e:
         raise Exception(f"Could not open KPOINTS file: {e}")
 
-def get_eigenval(path: str) -> vasp.outputs.Eigenval:
+def get_eigenval(path: str = "") -> vasp.outputs.Eigenval:
     try:
+        if not path: path = get_file_path_from_dialog()
+        if os.path.isdir(path): path = os.path.join(path, "EIGENVAL")
+        
         eigenval = vasp.outputs.Eigenval(path)
         return eigenval
     except Exception as e:
         raise Exception(f"Could not open EIGENVAL file: {e}")
 
-def get_outcar(path: str) -> vasp.outputs.Outcar:
+def get_outcar(path: str = "") -> vasp.outputs.Outcar:
     try:
+        if not path: path = get_file_path_from_dialog()
+        if os.path.isdir(path): path = os.path.join(path, "OUTCAR")
+        
         outcar = vasp.outputs.Outcar(path)
         return outcar
     except Exception as e:

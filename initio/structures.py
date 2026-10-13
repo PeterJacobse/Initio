@@ -210,6 +210,19 @@ class Structure(pmg_struct.Structure):
         """
         return Molecule(self.species, self.cart_coords)
 
+    def separate_by_element(self) -> dict[str, Structure]:
+        """Generate a dictionary of substructures, where the keys are the element symbols and the values are Structure objects containing all atoms of that type
+        """
+        comp = self.composition
+        lattice = self.lattice
+
+        sub_structures = {}
+        for key in comp.keys():
+            specie_list = [specie for specie in self.species if specie == key]
+            coords_list = [coord for coord, specie in zip(self.frac_coords, self.species) if specie == key]            
+            sub_structures.update({str(key.symbol): Structure(species = specie_list, coords = coords_list, lattice = lattice)})
+        return sub_structures
+
 
 
 class Molecule(pmg_struct.Molecule):

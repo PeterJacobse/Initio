@@ -1,9 +1,9 @@
 import os
 import numpy as np
 from .VaspBandUnfolding import vaspwfc
-from typing import Literal
 from .io import get_eigenval
 from pymatgen.io.vasp.outputs import Outcar
+from typing import Literal
 
 
 
@@ -48,13 +48,13 @@ def DOS_from_energies(eigenenergies: list | np.ndarray = [], gamma = None, sigma
                     DOS[1, index] += gamma / (gamma2 + delta_E2)
     return DOS
 
-def DOS_from_Lorentzians(energy: float | list | np.ndarray, centers: list | np.ndarray = [], gammas: list | np.ndarray = [], weights: list | np.ndarray | None = None):
+def DOS_from_Lorentzians(energy: float | list | np.ndarray, centers: list | np.ndarray = [], gammas: float | list | np.ndarray = .05, weights: list | np.ndarray | None = None):
     """Expands the (Local) Density Of States from a sum of Lorentzians.
 
     Args:
         energy (float | list | np.ndarray): Energy where to evaluate the LDOS. Providing a np.linspace gives a DOS evaluated over that domain.
         centers (list | np.ndarray, optional): Energy values of the eigenstates. Defaults to [].
-        gammas (list | np.ndarray, optional): HWHM values of the peaks. Defaults to [].
+        gammas (list | np.ndarray, optional): HWHM values of the peaks, expressed in eV. Defaults to 0.05 (50 meV).
         weights (list | np.ndarray, optional): Weights of the peaks. Defaults to [].
 
     Returns:
@@ -63,6 +63,7 @@ def DOS_from_Lorentzians(energy: float | list | np.ndarray, centers: list | np.n
     en = np.asarray(energy)
     rho = np.zeros_like(en, dtype = np.float64)
     if not isinstance(weights, np.ndarray | list): weights = np.ones_like(centers)
+    if not isinstance(gammas, list | np.ndarray): gammas = np.full_like(en, gammas, dtype = np.float32)
     
     for center, gamma, weight in zip(centers, gammas, weights):
         rho += weight * gamma / ((en - center) ** 2 + gamma ** 2)

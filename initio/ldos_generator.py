@@ -1,12 +1,14 @@
 import os
 import numpy as np
 from . import vaspwfc, Structure
-from .bands import get_eigenenergies_from_wavecar
+from .io import get_file_path_from_dialog, get_wavecar, get_structure
 from .eigenstate import Eigenstate
+from .bands import DOS_from_Lorentzians
 from scipy.ndimage import gaussian_filter, sobel
 import matplotlib.pyplot as plt
-from typing import Literal
 from tqdm.notebook import tqdm
+from typing import Literal
+from pymatgen.core.sites import PeriodicSite
 
 
 
@@ -20,12 +22,13 @@ class LDOSGenerator:
         self.struct = structure
         
         # Extract variables from wavecar
-        self.n_spins = int(wavecar_object._nspin)
-        self.n_kpts = int(wavecar_object._nkpts)
-        self.n_bands = int(wavecar_object._nbands)
-        self.voxels = wavecar_object._ngrid * 2
+        self.n_spins = int(self.wfc._nspin)
+        self.n_kpts = int(self.wfc._nkpts)
+        self.n_bands = int(self.wfc._nbands)
+        self.voxels = self.wfc._ngrid * 2
+        self.latvecs = self.wfc._Acell
         
-        voxel_size_Ang = np.diag(wavecar_object._Acell) / self.voxels # This may break if the unit cell is not cubic and organized as [x, y, z]
+        voxel_size_Ang = np.diag(self.latvecs) / self.voxels # This may break if the unit cell is not cubic and organized as [x, y, z]
         self.voxels_per_pm = 1 / (100 * np.mean(voxel_size_Ang))
         self.z_nm_per_vox = voxel_size_Ang[2] / 10
         self.get_surface_height()
@@ -61,6 +64,23 @@ class LDOSGenerator:
         else: result = f"LDOSGenerator object containing a structure at self.struct ({self.struct.formula}) and {len(self.eigenstates)} eigenstates extracted from wavecar object self.wfc in the energy range [{self.en_min}, {self.en_max}]\nparameters: {self.get_parameters()}."
         return result
 
+    @classmethod
+    def from_vasp_folder(cls, path: str = "", gamma_meV: float = 50, n_gammas: float = 5., tip_width_pm: float = 0., tip_p_fraction: float = 0., tip_height_pm: float = 200.):
+        if not path: path = get_file_path_from_dialog()
+        if os.path.isfile(path): path = os.path.dirname(path)
+        if not os.path.isdir(path): raise IOError(f"Invalid folder {path}.")
+        
+        files_in_folder = os.listdir(path)
+        if not "WAVECAR" in files_in_folder: raise IOError(f"Folder {path} contains no WAVECAR file.")
+        wfc = get_wavecar(os.path.join(path, "WAVECAR"))
+        
+        if not "CONTCAR" in files_in_folder:
+            if not "POSCAR" in files_in_folder: raise IOError(f"Folder {path} contains no structure file (POSCAR or CONTCAR).")
+            else: struct = get_structure(os.path.join(path, "POSCAR"))
+        else: struct = get_structure(os.path.join(path, "CONTCAR"))
+        
+        return cls(wfc, struct, gamma_meV, n_gammas, tip_width_pm, tip_p_fraction, tip_height_pm)
+
 
 
     # Structural information
@@ -84,6 +104,13 @@ class LDOSGenerator:
         z_target_nm = self.z_surface_nm + tip_height_pm / 1000
         z_slice_index = int(round(z_target_nm / self.z_nm_per_vox))
         return z_slice_index
+
+    def find_rarest_sites(self) -> list[PeriodicSite]:
+        comp = self.struct.composition
+        rarest_element = min(comp.keys(), key = lambda el: comp[el])
+        index_list = [index for index, site in enumerate(self.struct) if site.specie == rarest_element]
+        rarest_sites = [self.struct[index] for index in index_list]
+        return rarest_sites # type: ignore
 
 
 
@@ -112,22 +139,22 @@ class LDOSGenerator:
 
 
     # Tip
-    def set_tip_width(self, width_pm: float = 0.) -> None:
+    def set_tip_width(self, width_pm: float | int = 0.) -> None:
         if isinstance(width_pm, float | int) and not width_pm == self.tip_width_pm:
             self.tip_width_pm = width_pm
             self.tip_convolve_eigenstates()
         return
 
-    def set_tip_p_fraction(self, p_fraction: float = 0.) -> None:
+    def set_tip_p_fraction(self, p_fraction: float | int = 0.) -> None:
         if isinstance(p_fraction, float | int): self.tip_p_fraction = float(np.clip(p_fraction, 0, 1))
         return
 
-    def set_tip_shape(self, width_pm: float | None = None, p_fraction: float | None = None) -> None:
-        if isinstance(width_pm, float): self.set_tip_width(width_pm)
-        if isinstance(p_fraction, float): self.set_tip_p_fraction(p_fraction)
+    def set_tip_shape(self, width_pm: float | int | None = None, p_fraction: float | int | None = None) -> None:
+        if isinstance(width_pm, float | int): self.set_tip_width(width_pm)
+        if isinstance(p_fraction, float | int): self.set_tip_p_fraction(p_fraction)
         return
 
-    def set_tip_height(self, height_pm: float | None = None) -> None:
+    def set_tip_height(self, height_pm: float | int | None = None) -> None:
         if isinstance(height_pm, float | int) and not height_pm == self.tip_height_pm:
             self.tip_height_pm = height_pm
             self.tip_convolve_eigenstates()
@@ -135,7 +162,7 @@ class LDOSGenerator:
 
     def set_tip(self, width_pm: float | None = None, p_fraction: float | None = None, height_pm: float | None = None) -> None:
         self.set_tip_shape(width_pm, p_fraction)
-        if isinstance(height_pm, float): self.set_tip_height(height_pm)
+        if isinstance(height_pm, float | int): self.set_tip_height(height_pm)
         return
     
     def get_tip(self) -> dict[str, float]:
@@ -236,13 +263,32 @@ class LDOSGenerator:
 
 
     # Maps
-    def get_eigenenergies(self) -> np.ndarray:
-        return np.array([eigenstate.energy for eigenstate in self.eigenstates])
+    def get_eigenenergies(self, spin: Literal[-1, 0, 1, "both", "down", "up"] = "both") -> np.ndarray:
+        if isinstance(spin, str):
+            match spin.lower():                
+                case "up": spin_index = 0
+                case "down": spin_index = 1
+                case _: spin_index = 2
+        else:
+            spin_index = spin
+                
+        if spin_index in {0, 1}: output = np.array([eigenstate.energy for eigenstate in self.eigenstates if eigenstate.spin == spin_index])
+        else: output = np.array([eigenstate.energy for eigenstate in self.eigenstates])
+        return output
 
-    def get_energy_weights(self, energy: float | int = 0) -> np.ndarray:
+    def get_energy_weights(self, energy: float | int = 0, spin: Literal[-1, 0, 1, "both", "down", "up"] = "both") -> np.ndarray:
+        if isinstance(spin, str):
+            match spin.lower():                
+                case "up": spin_index = 0
+                case "down": spin_index = 1
+                case _: spin_index = 2
+        else:
+            spin_index = spin
+        
         weights = []
         
         for eigenstate in self.eigenstates:
+            if spin_index in {0, 1} and not spin_index == eigenstate.spin: continue
             energy_difference2 = (energy - eigenstate.energy) ** 2
             weight = self.gamma_eV / (self.gamma2_eV + energy_difference2)
             weights.append(weight)
@@ -272,62 +318,11 @@ class LDOSGenerator:
     def get_maps(self, energies: list | np.ndarray) -> list[np.ndarray]:
         return [self.get_map(energy) for energy in energies]
 
-    def get_maps_old(self, energy_values_meV: float | int | list | np.ndarray = 0., height_values_pm: float | int | list | np.ndarray | None = None,
-                    width_values_pm: float | int | list | np.ndarray | None = None, p_fractions: float | int | list | np.ndarray | None = None, output_folder: str | None = None) -> np.ndarray:
-        # Create the output directory relative to the calculation folder
-        if isinstance(output_folder, str): os.makedirs(output_folder, exist_ok = True)
-        
-        # Cleaning energy and tip shape inputs
-        if isinstance(height_values_pm, int | float): height_values_pm = [height_values_pm] # If a single height value is passed, put it in a list
-        if not isinstance(height_values_pm, list | np.ndarray): height_values_pm = [self.tip_height_pm] # If no height values are passed, use the one saved as attribute of LDG
-        
-        if isinstance(p_fractions, int | float): p_fractions = [p_fractions] # If a single p fraction value is passed, put it in a list
-        if not isinstance(p_fractions, list | np.ndarray): p_fractions = [self.tip_p_fraction] # If no p fraction values are passed, use the one saved as attribute of LDG
-        
-        if isinstance(width_values_pm, int | float): width_values_pm = [width_values_pm] # If a single height value is passed, put it in a list
-        if not isinstance(width_values_pm, list | np.ndarray): width_values_pm = [self.tip_width_pm] # If no width values are passed, use the one saved as attribute of LDG
-        
-        if isinstance(energy_values_meV, int | float): energy_values_meV = [energy_values_meV]
-        if not isinstance(energy_values_meV, list | np.ndarray): # Energies are the only parameters that have to be passed explicitly; there is no self.energy to fall back to
-            print("Invalid energy value(s)")
-            return
-        
-        
-        
-        map_array = np.empty(shape = (len(height_values_pm), len(width_values_pm), len(p_fractions), len(energy_values_meV), self.voxels[0], self.voxels[1]), dtype = np.float32)
-        # Loop over heights
-        for z_index, z_slice_height_pm in enumerate(height_values_pm):
-            # Slice out the 2D wavefunction from the 3D wavefunction at the requested height
-            z_target = self.z_surface_nm + z_slice_height_pm / 1000
-            z_slice_index = int(round(z_target / self.z_nm_per_vox))
-            wfns2D = self.wfns[:, :, :, :, :, z_slice_index]
-            s_wfns = wfns2D.reshape(-1, self.voxels[0], self.voxels[1]) # Flatten out the k and spin
-            p_wfns = [sobel(wavefunction, axis = 1, mode = "wrap") + 1j * sobel(wavefunction, axis = 0, mode = "wrap") for wavefunction in s_wfns]
-
-            for width_index, width_pm in enumerate(width_values_pm):
-                # Broaden the wavefunction according to their overlap with the Gaussian tip wavefunction
-                width_px = width_pm * self.voxels_per_pm # Convert the width from units of picometers to voxels
-                
-                s_wfns_broadened = [gaussian_filter(wavefunction, width_px, mode = "wrap") for wavefunction in s_wfns]
-                s_densities = np.asarray(np.abs(np.array(s_wfns_broadened)) ** 2, dtype = np.float32)
-                p_wfns_broadened = [gaussian_filter(wavefunction, width_px, mode = "wrap") for wavefunction in p_wfns]
-                p_densities = np.asarray(np.abs(np.array(p_wfns_broadened)) ** 2, dtype = np.float32)
-
-                for energy_index, target_energy_meV in enumerate(energy_values_meV):
-                    en_differences = np.array(self.energies, dtype = np.float32) - (.001 * target_energy_meV)
-                    
-                    weights = self.gamma_eV / (self.gamma2_eV + en_differences ** 2)
-                    weights /= np.sum(weights)
-
-                    s_image = np.average(s_densities, axis = 0, weights = weights)
-                    p_image = np.average(p_densities, axis = 0, weights = weights)
-                    
-                    for p_index, p_fraction in enumerate(p_fractions):
-                        image = (1 - p_fraction) * s_image + p_fraction * p_image
-                        map_array[z_index, width_index, p_index, energy_index] = image
-                        if not isinstance(output_folder, str): continue
-                        plt.imsave(os.path.join(output_folder, f"LDOS_h{int(z_slice_height_pm)}pm_w{int(round(width_pm))}pm_p{int(round(p_fraction * 100))}pct@{int(round(target_energy_meV))}meV.png"), image, cmap = "gray")
-        return map_array
+    def show_map(self, energy: float | int, cmap: str = "Greys_r") -> None:
+        map_array = self.get_map(energy)
+        plt.imshow(map_array, cmap = cmap)
+        plt.show()
+        return
 
 
 
@@ -335,5 +330,19 @@ class LDOSGenerator:
     def get_spatial_weights(self, x_nm: float = 0., y_nm: float = 0.) -> np.ndarray:
         return np.zeros((3, 3))
 
-    def get_spectrum(self, x_nm: float = 0., y_nm: float = 0.) -> np.ndarray:
-        return np.zeros((3, 3))
+    def get_DOS_spectrum(self, energies: list | np.ndarray = [], gamma_meV: float = 50, spin: Literal[-1, 0, 1, "both", "down", "up"] = "both") -> np.ndarray:
+        min_energy = min(energies)
+        max_energy = max(energies)
+        self.add_eigenstates(min_energy, max_energy, add_energy_padding = True)
+        eigenenergies = self.get_eigenenergies(spin = spin)
+        
+        DOS = DOS_from_Lorentzians(energies, centers = eigenenergies, gammas = gamma_meV / 1000)
+        return DOS
+    
+    def get_LDOS_spectrum(self, energies: list | np.ndarray = [], spin: Literal[-1, 0, 1, "both", "down", "up"] = "both", x_nm: float = 0., y_nm: float = 0.) -> np.ndarray:
+        min_energy = min(energies)
+        max_energy = max(energies)
+        self.add_eigenstates(min_energy, max_energy, add_energy_padding = True)        
+                
+        return np.zeros((3, 3)) 
+    

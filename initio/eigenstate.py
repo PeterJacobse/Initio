@@ -27,7 +27,11 @@ class Eigenstate:
         self.band = band
         self.psi = psi
         self.slice_axis = slice_axis # Default axis to slice the 3D wavefunction object along when extracting a 2D slice
-   
+        
+        self.voxels = list(self.psi.shape)        
+        self.voxel_size_Ang = np.diag(self.latvecs) / self.voxels # This may break if the unit cell is not cubic and organized as [x, y, z]
+        self.voxels_per_pm = 1 / (100 * np.mean(self.voxel_size_Ang))
+
     def __repr__(self) -> str:
         return self.info()
 
@@ -116,7 +120,7 @@ class Eigenstate:
         
         # Store the sliced wavefunction as the attribute self.psi2D_s. Also generate self.psi2D_p for a p-wave representation
         psi2D_s = wfn_2D
-        psi2D_p = sobel(wfn_2D, axis = 1, mode = "wrap") + 1j * sobel(wfn_2D, axis = 0, mode = "wrap")
+        psi2D_p = .125 * sobel(wfn_2D, axis = 1, mode = "wrap") * self.voxel_size_Ang[0] + .125 * 1j * sobel(wfn_2D, axis = 0, mode = "wrap") * self.voxel_size_Ang[1]
         return psi2D_s, psi2D_p
 
     def get_2D_orbital(self, index: int | bool = False, axis: Literal[-1, 0, 1, 2] = -1) -> np.ndarray:
