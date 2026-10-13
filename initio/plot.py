@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.colors as cols
 import matplotlib.ticker as ticker
 import matplotlib.pyplot as plt
+import matplotlib.figure as plt_fig
 from .structures import Structure, Molecule
 from .VaspBandUnfolding import vaspwfc
 import nglview as nv
@@ -17,7 +18,7 @@ import plotly.graph_objects as go
 
 
 
-cm = nv.color.ColormakerRegistry
+cm = nv.color.ColormakerRegistry # type: ignore
 cm.add_scheme_func('custom_carbon', '''
     this.atomColor = function (atom) {
         if (atom.element == "C") {
@@ -30,7 +31,7 @@ cm.add_scheme_func('custom_carbon', '''
 
 
 
-def complex_array(array: np.ndarray, phase_shift: float = 0.) -> plt.Figure:
+def complex_array(array: np.ndarray, phase_shift: float = 0.) -> plt_fig.Figure:
     """Convenience function for plotting a complex array
 
     Args:
@@ -42,7 +43,7 @@ def complex_array(array: np.ndarray, phase_shift: float = 0.) -> plt.Figure:
     ax.imshow(rgba_array)
     return fig
 
-def DOS(wavecar_object: vaspwfc, *args, **kwargs) -> plt.Figure:
+def DOS(wavecar_object: vaspwfc, *args, **kwargs) -> plt_fig.Figure:
     colors = kwargs.pop("colors", None)
     
     # No colors given. Use defaults
@@ -325,7 +326,7 @@ def structure(struct: Structure | Molecule, max_bond_length: float | None = None
     """)
     
     bonds = []
-    for atom_index in range(len(atoms)):
+    for atom_index in range(len(atoms)): # type: ignore
         Z1 = Z[atom_index]
         R1 = R[atom_index]
         color1 = Zcolors[Z1]
@@ -342,15 +343,16 @@ def structure(struct: Structure | Molecule, max_bond_length: float | None = None
     view._add_shape(bonds)
     
     view.clear_representations()
-    view.component_0.add_spacefill(radiusType = "vdw", radiusScale = atom_size)
-    view.component_0.add_spacefill(selection = "_C", radiusType = "vdw", radiusScale = atom_size, color = "custom_carbon")
-    view.component_0.add_spacefill(selection = "_N", radiusType = "vdw", radiusScale = atom_size + .1, colorValue = 2 * Zcolors[8]) # Emphasize nitrogen
+    view.component_0.add_spacefill(radiusType = "vdw", radiusScale = atom_size) # type: ignore
+    view.component_0.add_spacefill(selection = "_C", radiusType = "vdw", radiusScale = atom_size, color = "custom_carbon") # type: ignore
+    view.component_0.add_spacefill(selection = "_N", radiusType = "vdw", radiusScale = atom_size + .1, colorValue = 2 * Zcolors[8]) # type: ignore
+    # Emphasize nitrogen
     view.control.center(np.mean(struct.cart_coords, axis = 0))
     if flip_over: view.control.spin([1, 0, 0], np.deg2rad(180))
     view.center()
 
-    view.height = f"{height}px"
-    view.width = f"{width}px"
+    view.height = f"{height}px" # type: ignore
+    view.width = f"{width}px" # type: ignore
     view.layout.height = f"{height}px"
     view.layout.width = f"{width}px"
     view.layout.background = background_color

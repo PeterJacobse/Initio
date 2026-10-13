@@ -4,7 +4,6 @@ from .VaspBandUnfolding import vaspwfc
 from typing import Literal
 from .io import get_eigenval
 from pymatgen.io.vasp.outputs import Outcar
-from scipy.ndimage import sobel
 
 
 
@@ -229,85 +228,4 @@ def clean_kpath(kpath: list | np.ndarray, crystal_type: Literal["hexagonal", "or
                 print(f"Ignoring unrecognized kpoint in kpath: {kpoint}")
     
     return np.array(cleaned_kpath, dtype = float)
-
-
-
-class Eigenstate:
-    """Eigenstate object, comprising both the single-particle wavefunction and the single-particle energy (eigenenergy).
-    Unlike the pyvaspwfc convention of 1-indexing (e.g. ispin = 1 or 2), Eigenstate uses 0-based indexing like Python.
-    """
-    def __init__(self, energy: float, spin: int | str | bool = 0, kpoint: int = 0, band: int = 0, psi: np.ndarray = np.zeros((3, 3, 3))):
-        if not psi.ndim == 3: raise Exception(f"Invalid dimensionality {psi.ndim} for eigenstate wavefunction")
-        self.clean_spin(spin) # Creates attributes self.spin and self.spin_name
-        self.energy = energy
-        self.eigenenergy = energy # Alias
-        self.kpoint = kpoint
-        self.band = band
-        self.psi = psi
-   
-    def __repr__(self) -> str:
-        result = f"Eigenstate object\n  Energy:\t{self.eigenenergy = } eV\n  Spin:\t\t{self.spin = }\n\t\t{self.spin_name = }\n  Kpoint:\t{self.kpoint = }\n  Band index:\t{self.band = }\n  Wavefunction:\tself.psi = <np.{self.psi.__class__.__name__} (shape = {self.psi.shape})>"
-        return result
-    
-    def clean_spin(self, spin) -> None:
-        match spin:
-            case int() | bool() | float():
-                if not int(spin) in {0, 1}:
-                    raise Exception(f"Invalid spin index {spin}. Only 0 and 1 are recognized.")
-                else:
-                    self.spin = int(spin)
-                    self.spin_name = "up" if int(spin) == 1 else "down"
-            case str():
-                if not spin.lower() in {"up", "down"}:
-                    raise Exception(f"Invalid spin name {spin}. Only \"up\" and \"down\" are recognized.")
-                else:
-                    self.spin_name = spin.lower()
-                    self.spin = 1 if spin.lower() == "up" else 0
-            case _:
-                raise TypeError(f"Invalid type {type(spin)} for spin provided")
-        return
-
-    def slice_wavefunction(self, index: int = 0, axis: Literal[0, 1, 2] = 0) -> None:
-        match axis:
-            case 0: wfn_2D = self.psi[index]
-            case 1: wfn_2D = self.psi[:, index]
-            case 2: wfn_2D = self.psi[:, :, index]
-        
-        self.psi2D_s = wfn_2D
-        self.psi2D_p = sobel(wfn_2D, axis = 1, mode = "wrap") + 1j * sobel(wfn_2D, axis = 0, mode = "wrap")
-        return
-
-    @classmethod
-    def from_wavecar(cls, wavecar_object: vaspwfc, spin: int = 0, kpoint: int = 0, band: int = 0, target_energy: float | None = None):
-        wfc = wavecar_object
-        n_kpoints = int(wfc._nkpts)
-        n_spins = int(wfc._nspin)
-        n_bands = int(wfc._nbands)
-        
-        if not isinstance(spin, int) or not spin in {0, 1}: raise Exception(f"Invalid spin index {spin}. Only 0 and 1 are recognized.")
-        if spin == 1 and n_spins < 2: raise Exception(f"Invalid spin index {spin} for a wavecar object that has no spin polarization ({n_spins = }).")
-        if not isinstance(kpoint, int) or kpoint > n_kpoints - 1: raise Exception(f"Invalid k-point index {kpoint} for a wavecar object containing {n_kpoints} k-points.")
-        if not isinstance(target_energy, float):
-            if not isinstance(band, int) or band > n_bands - 1: raise Exception(f"Invalid band index {band} for a wavecar object containing {n_bands} bands.")
-        
-        try:
-            all_energies = wfc._bands
-            assert isinstance(all_energies, np.ndarray)
-            energies_at_spin_and_kpoint = all_energies[spin, kpoint]
-            
-            if isinstance(target_energy, float): # If a target energy is provided, find the eigenstate closest to that energy                
-                energy_differences = np.abs(all_energies - target_energy)
-                band = int(np.argmin(energy_differences))
-            
-            eigenenergy = float(energies_at_spin_and_kpoint[band])
-        except Exception as e:
-            raise Exception(f"Unable to extract the eigenenergy from the wavecar object: {e}")
-        
-        try:
-            psi = wfc.wfc_r(ispin = spin + 1, ikpt = kpoint + 1, iband = band + 1)
-            assert isinstance(psi, np.ndarray)
-        except Exception as e:
-            raise Exception(f"Unable to obtain the wavefunction from the wavecar object: {e}")
-            
-        return cls(eigenenergy, spin, kpoint, band, psi)
 

@@ -1,7 +1,8 @@
 import os
 import numpy as np
 from . import vaspwfc, Structure
-from .bands import get_eigenenergies_from_wavecar, Eigenstate
+from .bands import get_eigenenergies_from_wavecar
+from .eigenstate import Eigenstate
 from scipy.ndimage import gaussian_filter, sobel
 import matplotlib.pyplot as plt
 from typing import Literal
@@ -14,9 +15,7 @@ class LDOSGenerator:
     Generates an object that holds information on the single-particle wavefunctions.
     This information is used to calculate simulated local density of states or scanning tunneling microscopy maps, given information of the tip.
     """
-    def __init__(self, wavecar_object: vaspwfc, structure: Structure,
-                 gamma_meV: float = 50, n_gammas: float = 5.,
-                 tip_width_pm: float = 0., tip_p_fraction: float = 0., tip_height_pm: float = 200.):
+    def __init__(self, wavecar_object: vaspwfc, structure: Structure, gamma_meV: float = 50, n_gammas: float = 5., tip_width_pm: float = 0., tip_p_fraction: float = 0., tip_height_pm: float = 200.):
         self.wfc = wavecar_object
         self.struct = structure
         
@@ -48,15 +47,19 @@ class LDOSGenerator:
         self.set_tip(tip_width_pm, tip_p_fraction, tip_height_pm)
 
     def __repr__(self) -> str:
-        if not isinstance(self.en_min, int | float): result = "Empty LDOSGenerator object"
-        else: result = f"LDOSGenerator object containing {len(self.eigenstates)} eigenstates in the energy range [{self.en_min}, {self.en_max}]\nparameters: {self.get_parameters()}"
-        return result
+        return self.info()
     
     def __getitem__(self, key):
         return self.eigenstates[key]
     
     def __len__(self):
         return len(self.eigenstates)
+
+    def info(self) -> str:
+        self.struct.formula
+        if not isinstance(self.en_min, int | float): result = f"LDOSGenerator object containing a structure at self.struct ({self.struct.formula}) and wavecar object at self.wfc, but no extracted eigenstates.\nparameters: {self.get_parameters()}"
+        else: result = f"LDOSGenerator object containing a structure at self.struct ({self.struct.formula}) and {len(self.eigenstates)} eigenstates extracted from wavecar object self.wfc in the energy range [{self.en_min}, {self.en_max}]\nparameters: {self.get_parameters()}."
+        return result
 
 
 
@@ -164,7 +167,7 @@ class LDOSGenerator:
         
         states_by_key = {}
         for eigenstate in self.eigenstates:
-            key = (eigenstate.band, eigenstate.spin, eigenstate.kpoint)
+            key = eigenstate.band, eigenstate.spin, eigenstate.kpoint
             states_by_key.setdefault(key, eigenstate)
 
         missing_bands = [
@@ -177,7 +180,7 @@ class LDOSGenerator:
             for band in tqdm(missing_bands, desc = "Extracting wavefunctions"):
                 for spin_index in range(self.n_spins):
                     for kpoint in range(self.n_kpts):
-                        key = (band, spin_index, kpoint)
+                        key = band, spin_index, kpoint
                         if key in states_by_key: continue
                         new_eigenstate = Eigenstate.from_wavecar(self.wfc, spin = spin_index, kpoint = kpoint, band = band)
                         self.tip_convolve_eigenstate(new_eigenstate)
@@ -219,8 +222,9 @@ class LDOSGenerator:
         psi2D_s_wide = gaussian_filter(psi2D_s, tip_width_px, mode = "wrap")
         psi2D_p_wide = gaussian_filter(psi2D_p, tip_width_px, mode = "wrap")
         
-        eigenstate.psi2D_s_wide = psi2D_s_wide # type: ignore
-        eigenstate.psi2D_p_wide = psi2D_p_wide # type: ignore
+        # Store the tip convolved eigenstates as new attributes of the eigenstate object
+        setattr(eigenstate, "psi2D_s_wide", psi2D_s_wide)
+        setattr(eigenstate, "psi2D_p_wide", psi2D_p_wide)
         return
 
     def tip_convolve_eigenstates(self, tip_width_pm: float | None = None) -> None:
@@ -255,8 +259,8 @@ class LDOSGenerator:
         for index, eigenstate in enumerate(self.eigenstates):
             if not hasattr(eigenstate, "psi2D_s_wide"): self.tip_convolve_eigenstate(eigenstate)
             
-            psi2D_s_wide = eigenstate.psi2D_s_wide # type: ignore
-            psi2D_p_wide = eigenstate.psi2D_p_wide # type: ignore
+            psi2D_s_wide = getattr(eigenstate, "psi2D_s_wide")
+            psi2D_p_wide = getattr(eigenstate, "psi2D_p_wide")
             
             psi2D_s_abs_squared = np.abs(psi2D_s_wide) ** 2
             psi2D_p_abs_squared = np.abs(psi2D_p_wide) ** 2
