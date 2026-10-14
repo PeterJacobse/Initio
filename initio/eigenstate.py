@@ -28,9 +28,16 @@ class Eigenstate:
         self.psi = psi
         self.slice_axis = slice_axis # Default axis to slice the 3D wavefunction object along when extracting a 2D slice
         
+        # Grid
         self.voxels = list(self.psi.shape)        
         self.voxel_size_Ang = np.diag(self.latvecs) / self.voxels # This may break if the unit cell is not cubic and organized as [x, y, z]
         self.voxels_per_pm = 1 / (100 * np.mean(self.voxel_size_Ang))
+        
+        # Normalization
+        self.orb = np.abs(self.psi) ** 2
+        norm_fac = self.orb.sum()
+        self.orb /= norm_fac
+        self.psi /= np.sqrt(norm_fac)
 
     def __repr__(self) -> str:
         return self.info()
@@ -81,18 +88,8 @@ class Eigenstate:
                 raise TypeError(f"Invalid type {type(spin)} for spin provided")
         return
 
-    def slice_wavefunction(self, index: int | bool = False, axis: Literal[-1, 0, 1, 2] = -1) -> None:
-        """Generates 2D numpy arrays representing slices of the wavefunction. This function saves the wavefunction itself and its p-wave tip form to attributes self.psi2D_s and self.psi2D_p.
-
-        Args:
-            index (int | bool, optional): Slice index. Defaults to False, in which case it automatically slices where the wavefunction density os maximal.
-            axis (Literal[, optional): Axis perpendicular to the slice plane. Defaults to -1, in which case it uses the stored value of self.slice_axis.
-        """
-        self.psi2D_s, self.psi2D_p = self.get_2D_wavefunctions(index = index, axis = axis)
-        return
-
     def get_2D_wavefunctions(self, index: int | bool = False, axis: Literal[-1, 0, 1, 2] = -1) -> tuple[np.ndarray, np.ndarray]:
-        """Generate 2D numpy arrays representing slices of the wavefunction. This function outputs both the wavefunction itself and its p-wave tip form.
+        """Generate 2D numpy arrays representing slices of the wavefunction. This function outputs the wavefunction itself and its p-wave tip form.
 
         Args:
             index (int | bool, optional): Slice index. Defaults to False, in which case it automatically slices where the wavefunction density os maximal.
@@ -118,30 +115,19 @@ class Eigenstate:
             case 1: wfn_2D = self.psi[:, index]
             case 2: wfn_2D = self.psi[:, :, index]
         
-        # Store the sliced wavefunction as the attribute self.psi2D_s. Also generate self.psi2D_p for a p-wave representation
         psi2D_s = wfn_2D
         psi2D_p = .125 * sobel(wfn_2D, axis = 1, mode = "wrap") * self.voxel_size_Ang[0] + .125 * 1j * sobel(wfn_2D, axis = 0, mode = "wrap") * self.voxel_size_Ang[1]
         return psi2D_s, psi2D_p
 
-    def get_2D_orbital(self, index: int | bool = False, axis: Literal[-1, 0, 1, 2] = -1) -> np.ndarray:
-        if not axis in {0, 1, 2}: axis = self.slice_axis # type: ignore
-        # Default to the internally stored slice axis
-        
-        orb = np.abs(self.psi) ** 2
-        
-        if isinstance(index, bool):
-            # Auto select from the slice that gives the maximum intensity of the wavefunction density
-            match self.slice_axis:
-                case 0: maxima = np.max(orb, axis = (1, 2))
-                case 1: maxima = np.max(orb, axis = (0, 2))
-                case 2: maxima = np.max(orb, axis = (0, 1))
-            index = int(np.argmax(maxima))
+    def slice_wavefunction(self, index: int | bool = False, axis: Literal[-1, 0, 1, 2] = -1) -> None:
+        """Generate 2D numpy arrays representing slices of the wavefunction. This function saves the wavefunction and its p-wave tip form as attributes self.psi2D_s, self.psi2D_p.
 
-        match axis:
-            case 0: orb2D = orb[index]
-            case 1: orb2D = orb[:, index]
-            case 2: orb2D = orb[:, :, index]
-        return orb2D
+        Args:
+            index (int | bool, optional): Slice index. Defaults to False, in which case it automatically slices where the wavefunction density os maximal.
+            axis (Literal[, optional): Axis perpendicular to the slice plane. Defaults to -1, in which case it uses the stored value of self.slice_axis.
+        """
+        self.psi2D_s, self.psi2D_p = self.get_2D_wavefunctions(index = index, axis = axis)        
+        return
 
     def generate_thumbnail(self):
         psi2D_s, psi2D_p = self.get_2D_wavefunctions()

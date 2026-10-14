@@ -202,13 +202,18 @@ class Structure(pmg_struct.Structure):
             self[i] = (site.species, new_coords)
         return
 
-    def to_molecule(self) -> Molecule:
-        """Converts a Structure into a Molecule (discarding its lattice/periodicity properties).
+    def abundances(self, sort_by: Literal["index", "abundance"] = "abundance", increasing: bool = True) -> dict[str, int]:
+        """Convenience function to return a dict giving the number of atoms of each element in the structure, sorted either by atomic index or by abundance
 
         Returns:
-            Initio.Molecule: The New Molecule object
+            dict[str, int]: Dict of the form {"C": 21, "N": 3, ...}
         """
-        return Molecule(self.species, self.cart_coords)
+        comp_dict = {key: int(value) for key, value in self.composition.as_dict().items()}
+        
+        match sort_by:
+            case "index": sorted_dict = dict(sorted(comp_dict.items(), key = lambda item: next(el.Z for el in self.composition.elements if el.symbol == item[0]), reverse = not increasing))
+            case _: sorted_dict = dict(sorted(comp_dict.items(), key = lambda item: item[1], reverse = not increasing))
+        return sorted_dict
 
     def separate_by_element(self) -> dict[str, Structure]:
         """Generate a dictionary of substructures, where the keys are the element symbols and the values are Structure objects containing all atoms of that type
@@ -223,6 +228,42 @@ class Structure(pmg_struct.Structure):
             sub_structures.update({str(key.symbol): Structure(species = specie_list, coords = coords_list, lattice = lattice)})
         return sub_structures
 
+    def atom_positions(self, fractional: bool = False, sort_by: Literal["none", "index", "abundance"] = "abundance", increasing: bool = True) -> dict[str, np.ndarray]:
+        output_dict = {}
+        
+        if sort_by in {"index", "abundance"}:
+            comp_dict = self.abundances(sort_by = sort_by, increasing = increasing) # type: ignore
+            substructures = self.separate_by_element()
+            
+            for element in comp_dict.keys():
+                substructure = substructures[element]
+                value = substructure.frac_coords if fractional else substructure.cart_coords
+                output_dict.update({element: value})        
+        else:
+            value = self.frac_coords if fractional else self.cart_coords
+            output_dict.update({"all": value})
+        return output_dict
+
+    def atom_positions_list(self, fractional: bool = False, sort_by: Literal["none", "index", "abundance"] = "abundance", increasing: bool = True) -> list[tuple[str, np.ndarray]]:
+        pos_dict = self.atom_positions(fractional = fractional, sort_by = sort_by, increasing = increasing)
+        return [(key, value) for key, value in pos_dict.items()]
+
+    def rarest_atom_type(self) -> str:
+        pos_list = self.atom_positions_list(sort_by = "abundance", increasing = True)
+        return pos_list[0][0]
+
+    def rarest_atom_positions(self, fractional: bool = False) -> np.ndarray:
+        pos_list = self.atom_positions_list(fractional = fractional, sort_by = "abundance", increasing = True)
+        return pos_list[0][1]
+
+    def to_molecule(self) -> Molecule:
+        """Converts a Structure into a Molecule (discarding its lattice/periodicity properties).
+
+        Returns:
+            Initio.Molecule: The New Molecule object
+        """
+        return Molecule(self.species, self.cart_coords)
+
 
 
 class Molecule(pmg_struct.Molecule):
@@ -232,10 +273,17 @@ class Molecule(pmg_struct.Molecule):
         super().__init__(species = species, coords = coords)
 
     def __add__(self, other):
-        if not isinstance(other, Molecule | Structure): return Molecule(self.species, self.cart_coords) #
+        if not isinstance(other, Molecule | Structure): return Molecule(self.species, self.cart_coords)
         combined_species = self.species + other.species
-        combined_coords = np.vstack((self.cart_coords, other.cart_coords))        
+        combined_coords = np.vstack((self.cart_coords, other.cart_coords))
         return Molecule(species = combined_species, coords = combined_coords)
+
+    @classmethod
+    def from_file(cls, filename: str, **kwargs) -> Self:
+        parent_instance = super().from_file(filename, **kwargs)
+        child_instance = cls.__new__(cls)
+        [setattr(child_instance, key, value) for key, value in vars(parent_instance).items()]
+        return child_instance
 
     def exchange_atom(self, index: int, element: str | int) -> None:
         """Function to substitute an atom in the Molecule. Changes the coordinates in place.
@@ -305,4 +353,57 @@ class Molecule(pmg_struct.Molecule):
         """
         self.rotate_sites(range(len(self.sites)), theta = np.deg2rad(theta_deg), axis = vector)
         return
+
+    def abundances(self, sort_by: Literal["index", "abundance"] = "abundance", increasing: bool = True) -> dict[str, int]:
+        """Convenience function to return a dict giving the number of atoms of each element in the structure, sorted either by atomic index or by abundance
+
+        Returns:
+            dict[str, int]: Dict of the form {"C": 21, "N": 3, ...}
+        """
+        comp_dict = {key: int(value) for key, value in self.composition.as_dict().items()}
+        
+        match sort_by:
+            case "index": sorted_dict = dict(sorted(comp_dict.items(), key = lambda item: next(el.Z for el in self.composition.elements if el.symbol == item[0]), reverse = not increasing))
+            case _: sorted_dict = dict(sorted(comp_dict.items(), key = lambda item: item[1], reverse = not increasing))
+        return sorted_dict
+
+    def atom_positions(self, sort_by: Literal["none", "index", "abundance"] = "abundance", increasing: bool = True) -> dict[str, np.ndarray]:
+        output_dict = {}
+        
+        if sort_by in {"index", "abundance"}:
+            comp_dict = self.abundances(sort_by = sort_by, increasing = increasing) # type: ignore
+            substructures = self.separate_by_element()
+            
+            for element in comp_dict.keys():
+                substructure = substructures[element]
+                value = substructure.cart_coords
+                output_dict.update({element: value})        
+        else:
+            value = self.cart_coords
+            output_dict.update({"all": value})
+        return output_dict
+
+    def atom_positions_list(self, sort_by: Literal["none", "index", "abundance"] = "abundance", increasing: bool = True) -> list[tuple[str, np.ndarray]]:
+        pos_dict = self.atom_positions(sort_by = sort_by, increasing = increasing)
+        return [(key, value) for key, value in pos_dict.items()]
+
+    def rarest_atom_type(self) -> str:
+        pos_list = self.atom_positions_list(sort_by = "abundance", increasing = True)
+        return pos_list[0][0]
+
+    def rarest_atom_positions(self) -> np.ndarray:
+        pos_list = self.atom_positions_list(sort_by = "abundance", increasing = True)
+        return pos_list[0][1]
+
+    def separate_by_element(self) -> dict[str, Molecule]:
+        """Generate a dictionary of substructures, where the keys are the element symbols and the values are Structure objects containing all atoms of that type
+        """
+        comp = self.composition
+
+        sub_structures = {}
+        for key in comp.keys():
+            specie_list = [specie for specie in self.species if specie == key]
+            coords_list = [coord for coord, specie in zip(self.cart_coords, self.species) if specie == key]            
+            sub_structures.update({str(key.symbol): Molecule(species = specie_list, coords = coords_list)})
+        return sub_structures
 
