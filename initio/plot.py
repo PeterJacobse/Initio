@@ -194,7 +194,7 @@ def levels(wavecar_object: vaspwfc | None = None, energies: list | np.ndarray = 
         if energy < en_min or energy > en_max: continue
         
         band_index = band_indices[index]
-        tooltip = f"<b>Band / Level index:</b> {band_index}<br><b>energy:</b> {energy:.3f} eV"
+        tooltip = f"<b>band / level index:</b> {band_index}<br><b>energy:</b> {energy:.3f} eV"
         
         if has_spin:
             match spins[index]:
@@ -313,7 +313,7 @@ def structure(struct: Structure | Molecule, max_bond_length: float | None = None
                 var atom = pickingProxy.atom;
                 
                 // Build the clean string showing name and index
-                customTooltip.innerText = atom.qualifiedName() + " (Index: " + atom.index + ")";
+                customTooltip.innerText = atom.qualifiedName() + " (index: " + atom.index + "; coords: [" + atom.x.toFixed(2) + ", " + atom.y.toFixed(2) + ", " + atom.z.toFixed(2) + "])";
                 
                 // Position near the recorded mouse coordinates and display
                 customTooltip.style.left = (mouseX + 15) + "px";

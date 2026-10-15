@@ -10,6 +10,18 @@ from typing import Literal
 
 
 
+def get_spin_index(spin: Literal[-1, 0, 1, "both", "down", "up"] = "both") -> int:
+    if isinstance(spin, str):
+        match spin.lower():                
+            case "up": spin_index = 1
+            case "down": spin_index = 0
+            case _: spin_index = 2
+    else:
+        spin_index = spin
+    return spin_index
+
+
+
 class Eigenstate:
     """Eigenstate object, comprising both the single-particle wavefunction and the single-particle energy (eigenenergy).
     Unlike the pyvaspwfc convention of 1-indexing (e.g. ispin = 1 or 2), Eigenstate uses 0-based indexing like Python.
@@ -152,15 +164,19 @@ class Eigenstate:
         return
 
     @classmethod
-    def from_wavecar(cls, wavecar_object: vaspwfc, spin: int = 0, kpoint: int = 0, band: int = 0, target_energy: float | None = None):
+    def from_wavecar(cls, wavecar_object: vaspwfc, spin: Literal[-1, 0, 1, "both", "down", "up"] = "both", kpoint: int = 0, band: int = 0, target_energy: float | None = None):
         wfc = wavecar_object
         n_kpoints = int(wfc._nkpts)
         n_spins = int(wfc._nspin)
         n_bands = int(wfc._nbands)
         latvecs = wfc._Acell
         
-        if not isinstance(spin, int) or not spin in {0, 1}: raise Exception(f"Invalid spin index {spin}. Only 0 and 1 are recognized.")
-        if spin == 1 and n_spins < 2: raise Exception(f"Invalid spin index {spin} for a wavecar object that has no spin polarization ({n_spins = }).")
+        try:
+            spin_index = get_spin_index(spin)
+            assert spin_index in {0, 1}
+        except:
+            raise Exception(f"Invalid spin index {spin_index}. Only 0 and 1 are recognized.")
+        if spin_index == 1 and n_spins < 2: raise Exception(f"Invalid spin index {spin} for a wavecar object that has no spin polarization ({n_spins = }).")
         if not isinstance(kpoint, int) or kpoint > n_kpoints - 1: raise Exception(f"Invalid k-point index {kpoint} for a wavecar object containing {n_kpoints} k-points.")
         if not isinstance(target_energy, float):
             if not isinstance(band, int) or band > n_bands - 1: raise Exception(f"Invalid band index {band} for a wavecar object containing {n_bands} bands.")
@@ -185,7 +201,7 @@ class Eigenstate:
             raise Exception(f"Unable to extract the eigenenergy from the wavecar object: {e}")
         
         try:
-            psi = wfc.wfc_r(ispin = spin + 1, ikpt = kpoint + 1, iband = band + 1)
+            psi = wfc.wfc_r(ispin = spin_index + 1, ikpt = kpoint + 1, iband = band + 1)
             assert isinstance(psi, np.ndarray)
         except Exception as e:
             raise Exception(f"Unable to obtain the wavefunction from the wavecar object: {e}")

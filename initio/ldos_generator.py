@@ -1,13 +1,27 @@
 import os
 import numpy as np
-from . import vaspwfc, Structure
+from . import vaspwfc, Structure, plot
 from .io import get_file_path_from_dialog, get_wavecar, get_structure
 from .eigenstate import Eigenstate
 from .bands import DOS_from_Lorentzians
 from scipy.ndimage import gaussian_filter, sobel
 import matplotlib.pyplot as plt
+import nglview as nv
+import plotly.graph_objects as go
 from tqdm.notebook import tqdm
 from typing import Literal
+
+
+
+def get_spin_index(spin: Literal[-1, 0, 1, "both", "down", "up"] = "both") -> int:
+    if isinstance(spin, str):
+        match spin.lower():                
+            case "up": spin_index = 1
+            case "down": spin_index = 0
+            case _: spin_index = 2
+    else:
+        spin_index = spin
+    return spin_index
 
 
 
@@ -16,9 +30,9 @@ class LDOSGenerator:
     Generates an object that holds information on the single-particle wavefunctions.
     This information is used to calculate simulated local density of states or scanning tunneling microscopy maps, given information of the tip.
     """
-    def __init__(self, wavecar_object: vaspwfc, structure: Structure, gamma_meV: float = 50, n_gammas: float = 5., tip_width_pm: float = 0., tip_p_fraction: float = 0., tip_height_pm: float = 200.):
+    def __init__(self, wavecar_object: vaspwfc, struct: Structure, gamma_meV: float = 50, n_gammas: float = 5., tip_width_pm: float = 0., tip_p_fraction: float = 0., tip_height_pm: float = 200.):
         self.wfc = wavecar_object
-        self.struct = structure
+        self.struct = struct
         
         # Extract variables from wavecar
         self.n_spins = int(self.wfc._nspin)
@@ -110,6 +124,26 @@ class LDOSGenerator:
         indices = [round(value) for value in self.voxels * frac_pos]
         return indices
 
+    def show_structure(self, max_bond_length: float | None = None, width: int = 800, height: int = 600, atom_size: float = .3, bond_size: float = .22,
+                       camera_type: Literal["orthographic", "perspective"] = "orthographic", flip_over: bool = False, background_color: str = "#000000",
+                       show_tip_plane: bool = False, plane_rgb_color: list = [0.0, 0.8, 0.8]) -> nv.NGLWidget:
+        view = plot.structure(self.struct, max_bond_length = max_bond_length, width = width, height = height, atom_size = atom_size, bond_size = bond_size, camera_type = camera_type, flip_over = flip_over, background_color = background_color)
+        if show_tip_plane: self.add_plane_to_view(view, rgb_color = plane_rgb_color)
+        return view
+
+    def add_plane_to_view(self, view: nv.NGLWidget, z_above_surface_pm: float | int | None = None, rgb_color: list = [0.0, 0.8, 0.8]) -> None:
+        if not z_above_surface_pm: z_above_surface_pm = self.tip_height_pm
+        z_above_surface_A = z_above_surface_pm / 100
+        z_surface_A = self.z_surface_nm * 10
+        z_A = z_surface_A + z_above_surface_A
+                
+        vertices = [0, 0, z_A] + [self.latvecs[0, 0], 0, z_A] + [self.latvecs[0, 0], self.latvecs[1, 1], z_A] + [0, self.latvecs[1, 1], z_A]
+        vertex_colors = rgb_color * 4
+        triangle_indices = [0, 1, 2, 0, 2, 3, 0, 2, 1, 0, 3, 2]
+
+        view.shape.add_mesh(vertices, vertex_colors, triangle_indices, None, "My Z-Plane") # type: ignore
+        return
+
 
 
     # Energy
@@ -140,31 +174,31 @@ class LDOSGenerator:
     def set_tip_width(self, width_pm: float | int | None = None, recompute: bool = True) -> None:
         if isinstance(width_pm, float | int) and not width_pm == self.tip_width_pm:
             self.tip_width_pm = width_pm
-            if recompute: self.calculate_apparent_orbitals()
+            if recompute: self.stack_orbitals()
         return
 
     def set_tip_p_fraction(self, p_fraction: float | int | None = None, recompute: bool = True) -> None:
         if isinstance(p_fraction, float | int):
             self.tip_p_fraction = float(np.clip(p_fraction, 0, 1))
-            if recompute: self.calculate_apparent_orbitals()
+            if recompute: self.stack_orbitals()
         return
 
     def set_tip_shape(self, width_pm: float | int | None = None, p_fraction: float | int | None = None, recompute: bool = True) -> None:
         self.set_tip_width(width_pm, recompute = False)
         self.set_tip_p_fraction(p_fraction, recompute = False)
-        if recompute: self.calculate_apparent_orbitals()
+        if recompute: self.stack_orbitals()
         return
 
     def set_tip_height(self, height_pm: float | int | None = None, recompute: bool = True) -> None:
         if isinstance(height_pm, float | int) and not height_pm == self.tip_height_pm:
             self.tip_height_pm = height_pm
-            if recompute: self.calculate_apparent_orbitals()
+            if recompute: self.stack_orbitals()
         return
 
     def set_tip(self, width_pm: float | None = None, p_fraction: float | None = None, height_pm: float | None = None, recompute: bool = True) -> None:
         self.set_tip_shape(width_pm, p_fraction, recompute = False)
         self.set_tip_height(height_pm, recompute = False)
-        if recompute: self.calculate_apparent_orbitals()
+        if recompute: self.stack_orbitals()
         return
     
     def get_tip(self) -> dict[str, float]:
@@ -212,8 +246,8 @@ class LDOSGenerator:
                     for kpoint in range(self.n_kpts):
                         key = (band, spin_index, kpoint)
                         if key in states_by_key: continue
-                        new_eigenstate = Eigenstate.from_wavecar(self.wfc, spin = spin_index, kpoint = kpoint, band = band)
-                        self.tip_convolve_eigenstate(new_eigenstate)
+                        new_eigenstate = Eigenstate.from_wavecar(self.wfc, spin = spin_index, kpoint = kpoint, band = band) # type: ignore
+                        self.calculate_apparent_orbital(new_eigenstate)
                         states_by_key[key] = new_eigenstate
             tq.clear()
         
@@ -229,6 +263,8 @@ class LDOSGenerator:
             if band_max > self.band_max: self.en_max = en_max
             self.band_min = min(self.band_min, band_min)
             self.band_max = max(self.band_max, band_max)
+        
+        self.stack_orbitals()
         return
 
     def slice_eigenstate(self, eigenstate: Eigenstate, tip_height_pm: float | None = None) -> None:
@@ -286,31 +322,38 @@ class LDOSGenerator:
         tq.clear()
         return
 
+    def stack_orbitals(self) -> None:
+        if len(self.eigenstates) < 1: return
+        spin_up_orbs = []
+        spin_down_orbs = []
+        all_orbs = []
+        
+        tq = tqdm(self.eigenstates, desc = "Computing the tunneling matrix elements and stacking single-particle maps")
+        for eigenstate in tq:
+            if not hasattr(eigenstate, "apparent_orbital"): self.calculate_apparent_orbital(eigenstate)
+            
+            orb = getattr(eigenstate, "apparent_orbital")
+            all_orbs.append(orb)
+            if eigenstate.spin == 0: spin_up_orbs.append(orb)
+            else: spin_down_orbs.append(orb)
+        tq.clear()
+        
+        self.all_orbs = np.array(all_orbs, dtype = np.float32)
+        self.spin_up_orbs = np.array(spin_up_orbs, dtype = np.float32)
+        self.spin_down_orbs = np.array(spin_up_orbs, dtype = np.float32)            
+        return
+
 
 
     # Maps
     def get_eigenenergies(self, spin: Literal[-1, 0, 1, "both", "down", "up"] = "both") -> np.ndarray:
-        if isinstance(spin, str):
-            match spin.lower():                
-                case "up": spin_index = 0
-                case "down": spin_index = 1
-                case _: spin_index = -1
-        else:
-            spin_index = spin
-        
+        spin_index = get_spin_index(spin)        
         if spin_index in {0, 1}: output = np.array([eigenstate.energy for eigenstate in self.eigenstates if eigenstate.spin == spin_index]) # Filter by spin
         else: output = np.array([eigenstate.energy for eigenstate in self.eigenstates])
         return output
 
     def get_energy_weights(self, energy: float | int = 0, spin: Literal[-1, 0, 1, "both", "down", "up"] = "both") -> np.ndarray:
-        if isinstance(spin, str):
-            match spin.lower():                
-                case "up": spin_index = 0
-                case "down": spin_index = 1
-                case _: spin_index = 2
-        else:
-            spin_index = spin
-        
+        spin_index = get_spin_index(spin)        
         weights = []
         
         for eigenstate in self.eigenstates:
@@ -322,23 +365,32 @@ class LDOSGenerator:
         weights = np.array(weights) / np.pi
         return weights
 
-    def get_map(self, energy: float | int = 0) -> np.ndarray:
+    def get_map(self, energy: float | int = 0, spin: Literal[-1, 0, 1, "both", "down", "up"] = "both") -> np.ndarray:
+        spin_index = get_spin_index(spin)
         self.add_eigenstates(energy, energy, add_energy_padding = True)
-        weights = self.get_energy_weights(energy)
-
-        map = np.zeros_like(self.eigenstates[0].psi2D_s, dtype = np.float64) # type: ignore
         
-        for index, eigenstate in enumerate(self.eigenstates):
-            if not hasattr(eigenstate, "apparent_orbital"): self.calculate_apparent_orbital(eigenstate)
-            apparent_orbital = getattr(eigenstate, "apparent_orbital") # This is the single-particle orbital, as observed by the tip (taking the tunneling matrix element into account). It will be stored back as a new attribute of eigenstate
-            map += weights[index] * apparent_orbital
+        weights = self.get_energy_weights(energy, spin = spin)
+        
+        #if spin_index == -1:
+        #    map = np.zeros_like(self.eigenstates[0].psi2D_s, dtype = np.float64) # type: ignore
+        #    for index, eigenstate in enumerate(self.eigenstates):
+        #        if not hasattr(eigenstate, "apparent_orbital"): self.calculate_apparent_orbital(eigenstate)
+        #        apparent_orbital = getattr(eigenstate, "apparent_orbital") # This is the single-particle orbital, as observed by the tip (taking the tunneling matrix element into account). It will be stored back as a new attribute of eigenstate
+        #        map += weights[index] * apparent_orbital
+        #else:
+        match spin_index:
+            case 0: apparent_orbitals = self.spin_down_orbs
+            case 1: apparent_orbitals = self.spin_up_orbs
+            case _: apparent_orbitals = self.all_orbs
+        
+        map = np.tensordot(weights, apparent_orbitals, axes = (0, 0))
         return map
 
-    def get_maps(self, energies: list | np.ndarray) -> list[np.ndarray]:
-        return [self.get_map(energy) for energy in energies]
+    def get_maps(self, energies: list | np.ndarray, spin: Literal[-1, 0, 1, "both", "down", "up"] = "both") -> list[np.ndarray]:
+        return [self.get_map(energy, spin = spin) for energy in energies]
 
-    def show_map(self, energy: float | int, cmap: str = "Greys_r") -> None:
-        map_array = self.get_map(energy)
+    def show_map(self, energy: float | int, cmap: str = "Greys_r", spin: Literal[-1, 0, 1, "both", "down", "up"] = "both") -> None:
+        map_array = self.get_map(energy, spin = spin)
         plt.imshow(map_array, cmap = cmap)
         plt.show()
         return
@@ -347,13 +399,11 @@ class LDOSGenerator:
 
     # Spectra
     def get_spatial_weights(self, grid_indices: list | np.ndarray | None = None, position: list | np.ndarray | None = None, fractional: bool = False, spin: Literal[-1, 0, 1, "both", "down", "up"] = "both") -> np.ndarray:
-        if isinstance(spin, str):
-            match spin.lower():                
-                case "up": spin_index = 0
-                case "down": spin_index = 1
-                case _: spin_index = -1
-        else:
-            spin_index = spin
+        spin_index = get_spin_index(spin)
+        match spin_index:
+            case 0: apparent_orbitals = self.spin_down_orbs
+            case 1: apparent_orbitals = self.spin_up_orbs
+            case _: apparent_orbitals = self.all_orbs
         
         if isinstance(position, list | np.ndarray):
             indices = self.map_position_to_indices(position, fractional = fractional)
@@ -365,15 +415,16 @@ class LDOSGenerator:
         else:
             raise Exception("Either a list of grid indices or a (cartesian or fractional) position needs to be provided to calculate the spatial LDOS weights")
         
-        weights = []
-        for index, eigenstate in enumerate(self.eigenstates):
-            if spin_index in {0, 1} and eigenstate.spin is not spin_index: continue
-            if not hasattr(eigenstate, "apparent_orbital"): self.calculate_apparent_orbital(eigenstate)
-            orb = getattr(eigenstate, "apparent_orbital")
-            
-            spatial_weight = float(orb[x_index, y_index])
-            weights.append(spatial_weight)
-        return np.array(weights)
+        weights = apparent_orbitals[:, x_index, y_index]
+        #weights = []
+        #for index, eigenstate in enumerate(self.eigenstates):
+        #    if spin_index in {0, 1} and eigenstate.spin is not spin_index: continue
+        #    if not hasattr(eigenstate, "apparent_orbital"): self.calculate_apparent_orbital(eigenstate)
+        #    orb = getattr(eigenstate, "apparent_orbital")
+        #    
+        #    spatial_weight = float(orb[x_index, y_index])
+        #    weights.append(spatial_weight)
+        return weights #np.array(weights)
 
     def get_DOS_spectrum(self, energies: list | np.ndarray = [], gamma_meV: float | None = None, spin: Literal[-1, 0, 1, "both", "down", "up"] = "both") -> np.ndarray:
         min_energy = min(energies)
@@ -389,12 +440,11 @@ class LDOSGenerator:
 
     def get_LDOS_spectrum(self, energies: list | np.ndarray = [], gamma_meV: float | None = None, grid_indices: list | np.ndarray | None = None, position: list | np.ndarray | None = None, fractional: bool = False, spin: Literal[-1, 0, 1, "both", "down", "up"] = "both") -> np.ndarray:
         if not isinstance(position, list | np.ndarray) and not isinstance(grid_indices, list | np.ndarray): return self.get_DOS_spectrum(energies = energies, gamma_meV = gamma_meV, spin = spin)        
-        
-        min_energy = min(energies)
-        max_energy = max(energies)
-        
         if isinstance(gamma_meV, float | int) and not gamma_meV == self.gamma_meV: self.set_energy_broadening(gamma = gamma_meV, units = "meV")
         gamma_meV = self.gamma_meV
+                
+        min_energy = min(energies)
+        max_energy = max(energies)
         self.add_eigenstates(min_energy, max_energy, add_energy_padding = True)
         
         weights = self.get_spatial_weights(grid_indices = grid_indices, position = position, fractional = fractional, spin = spin)
