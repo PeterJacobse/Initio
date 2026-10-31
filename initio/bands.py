@@ -63,7 +63,7 @@ def DOS_from_Lorentzians(energy: float | list | np.ndarray, centers: list | np.n
     en = np.asarray(energy)
     rho = np.zeros_like(en, dtype = np.float64)
     if not isinstance(weights, np.ndarray | list): weights = np.ones_like(centers)
-    if not isinstance(gammas, list | np.ndarray): gammas = np.full_like(en, gammas, dtype = np.float32)
+    if not isinstance(gammas, list | np.ndarray): gammas = np.full_like(centers, gammas, dtype = np.float32)
     
     for center, gamma, weight in zip(centers, gammas, weights):
         rho += weight * gamma / ((en - center) ** 2 + gamma ** 2)

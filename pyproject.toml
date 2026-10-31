@@ -15,7 +15,9 @@ dependencies = [
     "pyvaspwfc",
     "scikit-image>=0.26.0",
     "scipy>=1.17.1",
+    "spmh5 @ git+https://github.com/PeterJacobse/SPMH5.git",
 ]
 
 [tool.uv.sources]
 pyvaspwfc = { git = "https://github.com/QijingZheng/VaspBandUnfolding" }
+spmh5 = { git = "https://github.com/PeterJacobse/SPMH5.git" }
