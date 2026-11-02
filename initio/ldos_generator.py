@@ -517,4 +517,23 @@ class LDOSGenerator:
         
         LDOS = DOS_from_Lorentzians(energies, centers = eigenenergies, gammas = gamma_meV / 1000, weights = weights)
         return LDOS
+
+
+
+    # Fourier
+    def get_single_peak_Fourier_amplitudes(self, V_dc: float = 0., V_ac: float = 0., V_peak: float = 0.):
+        V_p_tilde = V_peak - 1j * self.gamma_eV # Complex peak voltage
+        DeltaV_tilde = V_p_tilde - V_dc # Complex difference between peak voltage and dc bias
+
+        s = np.sqrt(DeltaV_tilde ** 2 - V_ac ** 2) # Square root of difference of squares
+        s = np.where(s.imag > 0, -s, s) # Pick the negative root
+
+        D = DeltaV_tilde + s # Angle factor
+        phi = -np.angle(D)
+        
+        n = np.arange(1, 32)
+        amplitudes = (V_ac ** (n - 1) / np.abs(D) ** n) * np.sin(n * phi) / n
+        amplitudes[0] = 0
+        
+        return 2 * amplitudes / np.pi
     

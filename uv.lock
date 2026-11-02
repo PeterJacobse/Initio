@@ -1825,7 +1825,7 @@ wheels = [
 [[package]]
 name = "spmh5"
 version = "0.1.0"
-source = { git = "https://github.com/PeterJacobse/SPMH5.git#a2d9e631276db3bace5e0917eb8c54449f35a2d4" }
+source = { git = "https://github.com/PeterJacobse/SPMH5.git#5a5fca72435ee9724e4cac8cd189003a48fa7a3b" }
 dependencies = [
     { name = "h5py" },
     { name = "ipykernel" },
