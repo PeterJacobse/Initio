@@ -1,39 +1,65 @@
 import numpy as np
-from math import factorial, comb
+from math import comb
 from sympy import Expr, Symbol
 import matplotlib.colors as mcolors
 
 
 
-def Lorentzian(x: float | Symbol | np.ndarray, x0: float, gamma: float) -> float | Expr | np.ndarray:
+def Lorentzian(x: float | Symbol | np.ndarray, center: float, gamma: float) -> float | Expr | np.ndarray:
     """A normalized Lorentzian function centered around x0 with HWHM gamma.
 
     Args:
-        x (float | sympy.Symbol): Passing a float will evaluate the Lorentzian at that point to return a float. Passing a np.ndarray yields a np.ndarray. Passing a sympy.Symbol will generate a sympy.Expr object.
-        x0 (float): Center.
-        gamma (float): HWHM.
+        x (float | sympy.Symbol): Variable. Passing a float will evaluate the Lorentzian at that point and return a float. Passing a np.ndarray yields a np.ndarray. Passing a sympy.Symbol will generate a sympy.Expr object
+        center (float): Center of the Lorentzian function
+        gamma (float): Width (half-width at half-maximum) of the Lorentian function
 
     Returns:
         float | Expr
     """
     gamma2 = gamma ** 2
-    return (1.0 / (np.pi * gamma)) * (gamma2 / ((x - x0) ** 2 + gamma2)) # type: ignore
+    return (1.0 / (np.pi * gamma)) * (gamma2 / ((x - center) ** 2 + gamma2)) # type: ignore
 
-def Lorentz_taylor_coeffs(V_center: float, gamma: float, V0: float, N: int) -> np.ndarray:
+def Lorentzian_Taylor_coefficients(center: float, gamma: float, x0: float, N: int) -> np.ndarray:
     """Obtain the Taylor coefficients for a normalized Lorentzian function of width gamma, centered at V_center, for a Taylor expansion around V0
 
     Args:
-        V_center (float): Center of the Lorentzian function
-        gamma (float): Width of the Lorentian function
-        V0 (float): Taylor expansion center
+        center (float): Center of the Lorentzian function
+        gamma (float): Width (half-width at half-maximum) of the Lorentian function
+        x0 (float): Taylor expansion center
         N (int): Number of coefficients
 
     Returns:
         np.ndarray: Vector of Taylor coefficients
     """
-    d = (V0 - V_center) - 1j * gamma
+    d = (center - x0) - 1j * gamma
     n = np.arange(N)
     return np.imag((-1.0) ** n / d ** (n + 1)) / np.pi
+
+def Lorentzian_Fourier_amplitudes(center: float = 0, gamma: float = .05, x0: float = 0., dx: float = 0., N_harmonics: int = 32) -> np.ndarray:
+    """Obtain the amplitudes of the harmonics of an integrated Lorentzian transfer function subjected to a harmonic perturbation
+
+    Args:
+        center (float, optional): Center of the Lorentzian function. Defaults to 0.
+        gamma (float, optional): Width (half-width at half-maximum) of the Lorentian function. Defaults to .05.
+        x0 (float, optional): Center value of the harmonic modulation. Defaults to 0..
+        dx (float, optional): Amplitude of the harmonic modulation. Defaults to 0..
+        N_harmonics (int, optional): Number of harmonics. Defaults to 32.
+
+    Returns:
+        np.ndarray: Vector of Fourier amplitudes
+    """
+    V_p_tilde = center - 1j * gamma # Complex peak voltage
+    DeltaV_tilde = V_p_tilde - x0 # Complex difference between peak voltage and dc bias
+
+    s = np.sqrt(DeltaV_tilde ** 2 - dx ** 2) # Square root of difference of squares    
+    s = np.where(s.imag > 0, -s, s) # Pick the negative root
+
+    xi = DeltaV_tilde + s # Angle factor
+    phi = -np.angle(xi)
+    
+    n = np.arange(1, N_harmonics)
+    amplitudes = (dx ** (n - 1) / np.abs(xi) ** n) * np.sin(n * phi) / n    
+    return 2 * amplitudes / np.pi
 
 def diagonalQ(matrix: np.ndarray) -> bool:
     """
@@ -125,7 +151,7 @@ def numpy_to_latex(array: np.ndarray, matrix_type = "bmatrix", precision = 4):
     lines.append(f"\\end{{{matrix_type}}}")
     return "\n".join(lines)
 
-def complex_to_rgba(input_array: np.ndarray = np.zeros((2, 2)), phase_shift: float = 0., alpha: float = 1.) -> np.ndarray:
+def complex_to_rgba(input_array: np.ndarray = np.zeros((2, 2)), phase_shift: float = 0., alpha: float = 1., n_max: int = 1) -> np.ndarray:
     phase = np.angle(input_array) + phase_shift
     hue = (phase + np.pi) / (2 * np.pi) % 1
     mag = np.abs(input_array)
@@ -133,8 +159,8 @@ def complex_to_rgba(input_array: np.ndarray = np.zeros((2, 2)), phase_shift: flo
     flat_order = np.argsort(mag, axis = None)
     rows, cols = np.unravel_index(flat_order, mag.shape)
     sorted = np.array(list(zip(rows, cols)))
-    maximum = np.sum([mag[sorted[-idx, 0], sorted[-idx, 1]] for idx in range(1, 120)]) / 120
-    for idx in range(1, 120): mag[sorted[-idx, 0], sorted[-idx, 1]] = maximum
+    maximum = np.sum([mag[sorted[-idx, 0], sorted[-idx, 1]] for idx in range(1, n_max + 1)]) / n_max
+    for idx in range(1, n_max): mag[sorted[-idx, 0], sorted[-idx, 1]] = maximum
     
     value = mag / maximum # np.max(mag)
     saturation = np.ones_like(hue)
@@ -142,5 +168,4 @@ def complex_to_rgba(input_array: np.ndarray = np.zeros((2, 2)), phase_shift: flo
     rgb = np.clip(mcolors.hsv_to_rgb(hsv), 0, 1)
     rgba = np.concatenate((rgb, np.full_like(rgb, alpha)), axis = 2)[:, :, :4]
     return rgba
-
 
